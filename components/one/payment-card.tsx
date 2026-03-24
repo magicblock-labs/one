@@ -21,6 +21,7 @@ import { getPrimaryDomain, resolve } from "@bonfida/spl-name-service";
 import {
   type AggregatorToken,
   FALLBACK_TOKENS,
+  SOL_MINT,
   findTokenByMint,
 } from "@/lib/tokens";
 import { usePrices } from "@/hooks/use-sol-price";
@@ -124,6 +125,14 @@ function shortenAddress(value: string) {
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
+function formatTokenBalance(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "0";
+
+  return value.toLocaleString(undefined, {
+    maximumFractionDigits: value >= 1_000 ? 2 : value >= 1 ? 4 : 6,
+  });
+}
+
 const MAX_PRIVATE_DELAY_MS = 30 * 60 * 1000;
 
 function formatDelayValue(delayMs: number) {
@@ -184,6 +193,8 @@ export function PaymentCard() {
   const [resolvedDomainAddress, setResolvedDomainAddress] = useState<string | null>(null);
   const [recipientPrimaryDomain, setRecipientPrimaryDomain] = useState<string | null>(null);
   const [isResolvingRecipient, setIsResolvingRecipient] = useState(false);
+  const [walletTokenBalance, setWalletTokenBalance] = useState<string | null>(null);
+  const [isWalletTokenBalanceLoading, setIsWalletTokenBalanceLoading] = useState(false);
 
   const [status, setStatus] = useState<PaymentStatus>("idle");
   const [txSignature, setTxSignature] = useState<string | null>(null);
@@ -329,6 +340,59 @@ export function PaymentCard() {
       cancelled = true;
     };
   }, [connection, directReceiverAddress]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!connected || !publicKey) {
+      setWalletTokenBalance(null);
+      setIsWalletTokenBalanceLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setIsWalletTokenBalanceLoading(true);
+
+    const fetchWalletTokenBalance = async () => {
+      try {
+        if (tokenMint === SOL_MINT) {
+          const lamports = await connection.getBalance(publicKey, "confirmed");
+          if (cancelled) return;
+          setWalletTokenBalance(
+            formatTokenBalance(lamports / Math.pow(10, selectedToken.decimals))
+          );
+          return;
+        }
+
+        const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+          publicKey,
+          { mint: new PublicKey(tokenMint) },
+          "confirmed"
+        );
+        if (cancelled) return;
+
+        const uiAmount = tokenAccounts.value.reduce((total, account) => {
+          const tokenAmount = account.account.data.parsed.info.tokenAmount;
+          return total + Number(tokenAmount.uiAmountString ?? tokenAmount.uiAmount ?? 0);
+        }, 0);
+
+        setWalletTokenBalance(formatTokenBalance(uiAmount));
+      } catch {
+        if (cancelled) return;
+        setWalletTokenBalance(null);
+      } finally {
+        if (cancelled) return;
+        setIsWalletTokenBalanceLoading(false);
+      }
+    };
+
+    void fetchWalletTokenBalance();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [connection, connected, publicKey, tokenMint, selectedToken.decimals, status]);
 
   useEffect(() => {
     const params = new URLSearchParams(searchParams.toString());
@@ -490,7 +554,9 @@ export function PaymentCard() {
         throw new Error(errData.error || `Build failed: ${buildRes.status}`);
       }
 
-      const jsonResponse=  (await buildRes.json());
+      const jsonResponse = await buildRes.json();
+      console.log("Res:\n%s", JSON.stringify(jsonResponse, null, 2));
+
       const unsignedTransaction = jsonResponse as UnsignedPaymentTransaction;
 
       if (unsignedTransaction.version !== "legacy") {
@@ -580,27 +646,37 @@ export function PaymentCard() {
             <div className="rounded-xl bg-[var(--surface-inner)] border border-border/50 p-4">
               <div className="text-xs text-muted-foreground mb-3">You send</div>
               <div className="flex items-center justify-between">
-                <button
-                  onClick={() => setModalOpen(true)}
-                  className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-accent/60 hover:bg-accent transition-colors cursor-pointer"
-                >
-                  {selectedToken.logoURI ? (
-                    <img
-                      src={selectedToken.logoURI}
-                      alt={selectedToken.symbol}
-                      className="w-7 h-7 rounded-full"
-                      crossOrigin="anonymous"
-                    />
-                  ) : (
-                    <div className="w-7 h-7 rounded-full bg-muted flex items-center justify-center text-xs font-bold text-muted-foreground">
-                      {selectedToken.symbol.charAt(0)}
+                <div>
+                  <button
+                    onClick={() => setModalOpen(true)}
+                    className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-accent/60 hover:bg-accent transition-colors cursor-pointer"
+                  >
+                    {selectedToken.logoURI ? (
+                      <img
+                        src={selectedToken.logoURI}
+                        alt={selectedToken.symbol}
+                        className="w-7 h-7 rounded-full"
+                        crossOrigin="anonymous"
+                      />
+                    ) : (
+                      <div className="w-7 h-7 rounded-full bg-muted flex items-center justify-center text-xs font-bold text-muted-foreground">
+                        {selectedToken.symbol.charAt(0)}
+                      </div>
+                    )}
+                    <span className="text-foreground font-semibold text-sm">
+                      {selectedToken.symbol}
+                    </span>
+                    <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+                  </button>
+                  {connected && publicKey && (
+                    <div className="mt-1 px-1 text-xs text-muted-foreground">
+                      Balance:{" "}
+                      {isWalletTokenBalanceLoading
+                        ? "..."
+                        : `${walletTokenBalance ?? "0"} ${selectedToken.symbol}`}
                     </div>
                   )}
-                  <span className="text-foreground font-semibold text-sm">
-                    {selectedToken.symbol}
-                  </span>
-                  <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
-                </button>
+                </div>
                 <div className="text-right">
                   <input
                     type="text"
