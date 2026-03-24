@@ -1,0 +1,134 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --background: #131a2a;
+  --foreground: #e8eaed;
+  --card: #1a2235;
+  --card-foreground: #e8eaed;
+  --popover: #1a2235;
+  --popover-foreground: #e8eaed;
+  --primary: #a855f7;
+  --primary-foreground: #ffffff;
+  --secondary: #232d42;
+  --secondary-foreground: #e8eaed;
+  --muted: #232d42;
+  --muted-foreground: #7a8599;
+  --accent: #2a3548;
+  --accent-foreground: #e8eaed;
+  --destructive: #ff4757;
+  --destructive-foreground: #ffffff;
+  --border: #2a3548;
+  --input: #232d42;
+  --ring: #a855f7;
+  --chart-1: #a855f7;
+  --chart-2: #3fb68b;
+  --chart-3: #4d96ff;
+  --chart-4: #ffd93d;
+  --chart-5: #c56cf0;
+  --radius: 0.75rem;
+  --surface-elevated: #1e2840;
+  --surface-container: #171e30;
+  --surface-inner: #1e2840;
+  --success: #3fb68b;
+  --success-foreground: #131a2a;
+}
+
+@theme inline {
+  --font-sans: 'Inter', 'Geist', 'Geist Fallback', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', 'Geist Mono Fallback', monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-surface-container: var(--surface-container);
+  --color-surface-inner: var(--surface-inner);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--background);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--accent);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-foreground);
+}
+
+/* Solana Wallet Adapter Modal Overrides */
+.wallet-adapter-modal-wrapper {
+  background-color: var(--card) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 1rem !important;
+}
+.wallet-adapter-modal-overlay {
+  background: rgba(0, 0, 0, 0.7) !important;
+}
+.wallet-adapter-modal-title {
+  color: var(--foreground) !important;
+}
+.wallet-adapter-modal-list .wallet-adapter-button {
+  color: var(--foreground) !important;
+}
+.wallet-adapter-modal-list .wallet-adapter-button:hover {
+  background-color: var(--accent) !important;
+}
+.wallet-adapter-modal-button-close {
+  background: var(--accent) !important;
+}
+.wallet-adapter-modal-button-close svg {
+  fill: var(--foreground) !important;
+}
+.wallet-adapter-modal-list li {
+  background: transparent !important;
+}
+.wallet-adapter-collapse {
+  background: transparent !important;
+}
+.wallet-adapter-modal-list .wallet-adapter-button {
+  background: transparent !important;
+  border-radius: 0.75rem !important;
+}
