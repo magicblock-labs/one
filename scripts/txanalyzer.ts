@@ -31,6 +31,35 @@ interface TxDump {
   }>;
 }
 
+interface ShuttleWalletDump {
+  erRpcEndpoint: string;
+  sourceFile: string;
+  sourceAddress: string;
+  shuttleWalletCount: number;
+  shuttleWallets: Array<{
+    shuttleWallet: string;
+    sourceOccurrences: Array<{
+      sourceSignature: string;
+      sourceSlot: number;
+      logLine: string;
+    }>;
+    transactionCount: number;
+    transactions: Array<{
+      blockTime: number | null;
+      confirmationStatus?: string;
+      err: unknown;
+      memo: string | null;
+      signature: string;
+      slot: number;
+      transaction?: {
+        meta?: {
+          logMessages?: string[] | null;
+        } | null;
+      } | null;
+    }>;
+  }>;
+}
+
 function colorize(value: string, color: string) {
   return `${color}${value}${ANSI_RESET}`;
 }
@@ -44,8 +73,13 @@ function dim(value: string) {
 }
 
 function usage() {
-  console.error("Usage: txanalyzer <run-directory>");
-  console.error("Example: txanalyzer store/4.451349229_451349230_451349230");
+  console.error("Usage: txanalyzer <mode> <run-directory>");
+  console.error("Modes:");
+  console.error("  fetch-shuttle  Fetch shuttle wallet transactions from from_tx.json");
+  console.error("  actions-sig    Read from_shuttle_wallet.json and print sorted actions_tx_sig values");
+  console.error("Examples:");
+  console.error("  txanalyzer fetch-shuttle store/4.451349229_451349230_451349230");
+  console.error("  txanalyzer actions-sig store/4.451349229_451349230_451349230");
 }
 
 function logWait(reason: string, ms: number) {
@@ -82,6 +116,11 @@ function getRunDirectory(inputPath: string) {
 function readTxDump(filePath: string) {
   const raw = readFileSync(filePath, "utf8");
   return JSON.parse(raw) as TxDump;
+}
+
+function readShuttleWalletDump(filePath: string) {
+  const raw = readFileSync(filePath, "utf8");
+  return JSON.parse(raw) as ShuttleWalletDump;
 }
 
 function extractShuttleWallets(dump: TxDump) {
@@ -262,20 +301,13 @@ async function getAllTransactionsForAddress(connection: Connection, address: Pub
   return transactions;
 }
 
-async function main() {
-  const [, , runDirectoryArg] = process.argv;
-  if (!runDirectoryArg) {
-    usage();
-    process.exitCode = 1;
-    return;
-  }
-
-  const runDirectory = getRunDirectory(runDirectoryArg);
+async function runFetchShuttle(runDirectory: string) {
   const fromTxPath = path.join(runDirectory, "from_tx.json");
   const fromTxDump = readTxDump(fromTxPath);
   const shuttleWallets = extractShuttleWallets(fromTxDump);
 
   console.log(`${colorize("■", ANSI_CYAN)} ${bold("Shuttle Wallet Analyzer")}`);
+  console.log(`${colorize("MODE", ANSI_CYAN)} fetch-shuttle`);
   console.log(`${colorize("DIR ", ANSI_CYAN)} ${runDirectory}`);
   console.log(`${colorize("SRC ", ANSI_CYAN)} ${fromTxPath}`);
   console.log(`${colorize("RPC ", ANSI_CYAN)} ${ER_RPC_ENDPOINT}`);
@@ -333,6 +365,95 @@ async function main() {
 
   console.log("");
   console.log(`${colorize("SAVE", ANSI_GREEN)} ${outputPath}`);
+}
+
+function extractActionSignatures(dump: ShuttleWalletDump) {
+  const actionSignatureCounts = new Map<string, number>();
+
+  for (const shuttleWallet of dump.shuttleWallets ?? []) {
+    for (const tx of shuttleWallet.transactions ?? []) {
+      const logMessages = tx.transaction?.meta?.logMessages ?? [];
+      for (const logLine of logMessages) {
+        for (const match of logLine.matchAll(/actions_tx_sig=([1-9A-HJ-NP-Za-km-z]{32,88})/g)) {
+          if (match[1]) {
+            actionSignatureCounts.set(match[1], (actionSignatureCounts.get(match[1]) ?? 0) + 1);
+          }
+        }
+      }
+    }
+  }
+
+  const signatures = Array.from(actionSignatureCounts.keys()).sort((left, right) =>
+    left.localeCompare(right)
+  );
+  const duplicates = signatures
+    .map((signature) => ({
+      signature,
+      count: actionSignatureCounts.get(signature) ?? 0,
+    }))
+    .filter((item) => item.count > 1);
+
+  return {
+    duplicates,
+    signatureCounts: actionSignatureCounts,
+    signatures,
+  };
+}
+
+function runActionsSig(runDirectory: string) {
+  const shuttleWalletPath = path.join(runDirectory, "from_shuttle_wallet.json");
+  const shuttleWalletDump = readShuttleWalletDump(shuttleWalletPath);
+  const actionSignatures = extractActionSignatures(shuttleWalletDump);
+
+  console.log(`${colorize("■", ANSI_CYAN)} ${bold("Shuttle Wallet Analyzer")}`);
+  console.log(`${colorize("MODE", ANSI_CYAN)} actions-sig`);
+  console.log(`${colorize("DIR ", ANSI_CYAN)} ${runDirectory}`);
+  console.log(`${colorize("SRC ", ANSI_CYAN)} ${shuttleWalletPath}`);
+  console.log(
+    `${colorize("INFO", ANSI_CYAN)} found ${bold(String(actionSignatures.signatures.length))} unique actions_tx_sig value(s)`
+  );
+
+  if (actionSignatures.duplicates.length === 0) {
+    console.log(colorize("UNIQ all actions_tx_sig values are unique", ANSI_GREEN));
+  } else {
+    console.log(
+      colorize(
+        `DUPL found ${actionSignatures.duplicates.length} duplicated actions_tx_sig value(s)`,
+        ANSI_RED
+      )
+    );
+    for (const duplicate of actionSignatures.duplicates) {
+      console.log(`${ANSI_BOLD}${ANSI_RED}${duplicate.signature}${ANSI_RESET} count=${duplicate.count}`);
+    }
+  }
+
+  const indexWidth = String(actionSignatures.signatures.length).length;
+  for (const [index, signature] of actionSignatures.signatures.entries()) {
+    console.log(`${String(index + 1).padStart(indexWidth, " ")}. ${signature}`);
+  }
+}
+
+async function main() {
+  const [, , modeArg, runDirectoryArg] = process.argv;
+  if (!modeArg || !runDirectoryArg) {
+    usage();
+    process.exitCode = 1;
+    return;
+  }
+
+  const runDirectory = getRunDirectory(runDirectoryArg);
+
+  if (modeArg === "fetch-shuttle") {
+    await runFetchShuttle(runDirectory);
+    return;
+  }
+
+  if (modeArg === "actions-sig") {
+    runActionsSig(runDirectory);
+    return;
+  }
+
+  throw new Error(`Unknown mode: ${modeArg}`);
 }
 
 main().catch((error: unknown) => {
