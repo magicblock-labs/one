@@ -12,6 +12,11 @@ const ANSI_GREEN = "\u001b[32m";
 const ANSI_CYAN = "\u001b[36m";
 const ANSI_YELLOW = "\u001b[33m";
 const ANSI_DIM = "\u001b[2m";
+const ANSI_BLUE = "\u001b[34m";
+const ANSI_MAGENTA = "\u001b[35m";
+const ANSI_BRIGHT_BLUE = "\u001b[94m";
+const ANSI_BRIGHT_MAGENTA = "\u001b[95m";
+const ANSI_BRIGHT_YELLOW = "\u001b[93m";
 const SHUTTLE_DELAY_MS = 500;
 const RPC_TIMEOUT_MS = 20_000;
 const SIGNATURE_PAGE_LIMIT = 1000;
@@ -81,6 +86,11 @@ function bold(value: string) {
 
 function dim(value: string) {
   return `${ANSI_DIM}${value}${ANSI_RESET}`;
+}
+
+function pickDuplicateColor(index: number) {
+  const palette = [ANSI_RED, ANSI_YELLOW, ANSI_BLUE, ANSI_MAGENTA, ANSI_BRIGHT_YELLOW, ANSI_BRIGHT_BLUE, ANSI_BRIGHT_MAGENTA, ANSI_CYAN, ANSI_GREEN];
+  return palette[index % palette.length];
 }
 
 function usage() {
@@ -542,28 +552,23 @@ async function runFetchActionsShuttle(runDirectory: string) {
   console.log(`${colorize("SAVE", ANSI_GREEN)} ${outputPath}`);
 }
 
-function getTransactionAccountAtIndex(transaction: unknown, index: number) {
-  const accountKey = (transaction as {
+function getInstructionAccount(transaction: unknown, instructionIndex: number, accountIndex: number) {
+  const account = (transaction as {
     transaction?: {
       message?: {
-        accountKeys?: Array<string | { pubkey?: string }>;
+        instructions?: Array<{
+          accounts?: string[];
+        }>;
       };
     };
-  } | null)?.transaction?.message?.accountKeys?.[index];
+  } | null)?.transaction?.message?.instructions?.[instructionIndex]?.accounts?.[accountIndex];
 
-  if (typeof accountKey === "string") {
-    return accountKey;
-  }
-
-  if (accountKey && typeof accountKey === "object" && typeof accountKey.pubkey === "string") {
-    return accountKey.pubkey;
-  }
-
-  return null;
+  return typeof account === "string" ? account : null;
 }
 
 function runActionsShuttle(runDirectory: string) {
-  const shuttleWalletIndex = 14;
+  const shuttleWalletInstructionIndex = 1;
+  const shuttleWalletIndex = 4;
   const actionsPath = path.join(runDirectory, "actions_shuttle.json");
   if (!existsSync(actionsPath)) {
     throw new Error(`Missing ${actionsPath}. Run: txanalyzer fetch-actions-shuttle ${runDirectory}`);
@@ -571,7 +576,11 @@ function runActionsShuttle(runDirectory: string) {
 
   const actionsDump = readActionsShuttleDump(actionsPath);
   const accountValues = actionsDump.actions.map((action) => ({
-    account: getTransactionAccountAtIndex(action.transaction, shuttleWalletIndex),
+    account: getInstructionAccount(
+      action.transaction,
+      shuttleWalletInstructionIndex,
+      shuttleWalletIndex
+    ),
     signature: action.signature,
   }));
   const accountCounts = new Map<string, number>();
@@ -585,6 +594,9 @@ function runActionsShuttle(runDirectory: string) {
     .map(([account, count]) => ({ account, count }))
     .filter((item) => item.count > 1)
     .sort((left, right) => left.account.localeCompare(right.account));
+  const duplicateColors = new Map(
+    duplicates.map((duplicate, index) => [duplicate.account, pickDuplicateColor(index)])
+  );
   const indexWidth = String(accountValues.length).length;
 
   console.log(`${colorize("■", ANSI_CYAN)} ${bold("Shuttle Wallet Analyzer")}`);
@@ -592,25 +604,36 @@ function runActionsShuttle(runDirectory: string) {
   console.log(`${colorize("DIR ", ANSI_CYAN)} ${runDirectory}`);
   console.log(`${colorize("SRC ", ANSI_CYAN)} ${actionsPath}`);
   console.log(
-    `${colorize("INFO", ANSI_CYAN)} printing account index ${shuttleWalletIndex} for ${bold(String(accountValues.length))} action transaction(s)`
+    `${colorize("INFO", ANSI_CYAN)} printing instruction[${shuttleWalletInstructionIndex}].accounts[${shuttleWalletIndex}] for ${bold(String(accountValues.length))} action transaction(s)`
   );
 
   if (duplicates.length === 0) {
-    console.log(colorize(`UNIQ all accountKeys[${shuttleWalletIndex}] values are unique`, ANSI_GREEN));
+    console.log(
+      colorize(
+        `UNIQ all instruction[${shuttleWalletInstructionIndex}].accounts[${shuttleWalletIndex}] values are unique`,
+        ANSI_GREEN
+      )
+    );
   } else {
     console.log(
       colorize(
-        `DUPL found ${duplicates.length} duplicated accountKeys[${shuttleWalletIndex}] value(s)`,
+        `DUPL found ${duplicates.length} duplicated instruction[${shuttleWalletInstructionIndex}].accounts[${shuttleWalletIndex}] value(s)`,
         ANSI_RED
       )
     );
     for (const duplicate of duplicates) {
-      console.log(`${ANSI_BOLD}${ANSI_RED}${duplicate.account}${ANSI_RESET} count=${duplicate.count}`);
+      const duplicateColor = duplicateColors.get(duplicate.account) ?? ANSI_RED;
+      console.log(`${ANSI_BOLD}${duplicateColor}${duplicate.account}${ANSI_RESET} count=${duplicate.count}`);
     }
   }
 
   for (const [index, item] of accountValues.entries()) {
-    const label = item.account ?? "<missing>";
+    const duplicateColor = item.account ? duplicateColors.get(item.account) : null;
+    const label = item.account
+      ? duplicateColor
+        ? colorize(item.account, duplicateColor)
+        : item.account
+      : "<missing>";
     console.log(
       `${String(index + 1).padStart(indexWidth, " ")}. ${label}${item.account ? "" : ` ${dim(`(signature=${item.signature})`)}`}`
     );
