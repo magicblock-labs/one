@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import bs58 from "bs58";
 import { Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
+import { getBackoffDelayMs, sleep, withNetworkRetry } from "./network-retry.ts";
 
 const DEFAULT_PAYMENTS_API_BASE_URL = "https://payments.magicblock.app";
 const DEFAULT_PAYMENTS_CLUSTER = "devnet";
@@ -20,8 +21,6 @@ const CHECKPOINT_INTERVAL = 10;
 const CHECKPOINT_DELAY_MS = 10_000;
 const BALANCE_SETTLE_ATTEMPTS = 5;
 const BALANCE_SETTLE_DELAY_MS = 500;
-const RATE_LIMIT_RETRY_DELAY_MS = 5_000;
-const DEFAULT_RETRY_DELAY_MS = 2_000;
 const EXPORT_SETTLE_DELAY_MS = 2_000;
 const EXPORT_PAGE_DELAY_MS = 400;
 const EXPORT_TX_DELAY_MS = 350;
@@ -236,36 +235,6 @@ function getNextRunDirectoryName(storeDir: string, slotSnapshots: AddressSlotSna
   return `${nextIndex}.${slotSuffix}`;
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function getSteppedBackoffDelayMs(baseDelayMs: number, attempt: number) {
-  let delayMs = baseDelayMs;
-
-  for (let currentAttempt = 1; currentAttempt < attempt; currentAttempt += 1) {
-    delayMs = delayMs < 16_000 ? Math.min(16_000, delayMs * 2) : Math.min(60_000, delayMs + 4_000);
-  }
-
-  return Math.min(60_000, delayMs);
-}
-
-function getRetryDelayMs(message: string, attempt: number) {
-  if (!/too many requests/i.test(message)) {
-    return DEFAULT_RETRY_DELAY_MS;
-  }
-
-  return getSteppedBackoffDelayMs(RATE_LIMIT_RETRY_DELAY_MS, attempt);
-}
-
-function isRateLimitError(message: string) {
-  return /too many requests|429/i.test(message);
-}
-
-function getRpcRetryDelayMs(attempt: number) {
-  return getSteppedBackoffDelayMs(500, attempt);
-}
-
 function expandHome(filePath: string) {
   if (filePath === "~") return os.homedir();
   if (filePath.startsWith("~/")) {
@@ -334,27 +303,17 @@ async function getLatestAddressSlot(connection: Connection, address: PublicKey) 
 }
 
 async function withRpcRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
-  let attempt = 1;
-
-  while (true) {
-    try {
-      return await fn();
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!isRateLimitError(message)) {
-        throw error;
-      }
-
-      const delayMs = getRpcRetryDelayMs(attempt);
+  return withNetworkRetry(
+    fn,
+    ({ attempt, delayMs, message }) => {
       printStatus(
         "RPC  ",
-        `${label} hit rate limit. Waiting ${delayMs}ms before retry ${attempt + 1}`,
+        `${label} failed (${message}). Waiting ${delayMs}ms before retry ${attempt + 1}`,
         ANSI_YELLOW
       );
-      await sleep(delayMs);
-      attempt += 1;
-    }
-  }
+    },
+    (message) => /too many requests|429|fetch failed|timed out|timeout|network/i.test(message)
+  );
 }
 
 async function collectNewTransactions(
@@ -773,15 +732,15 @@ async function main() {
         break;
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        const retryDelayMs = getRetryDelayMs(message, attempt);
         printStatus("ERR  ", message, ANSI_RED);
+        const retryDelayMs = getBackoffDelayMs(attempt);
         printStatus(
           "RETRY",
-          `Waiting ${retryDelayMs}ms before retrying transfer ${current}/${ntimes}`,
+          `Waiting ${retryDelayMs}ms before retrying transfer ${current}/${ntimes} (attempt ${attempt + 1})`,
           ANSI_MAGENTA
         );
-        attempt += 1;
         await sleep(retryDelayMs);
+        attempt += 1;
       }
     }
 

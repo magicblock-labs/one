@@ -4,14 +4,16 @@
   "private": true,
   "type": "module",
   "bin": {
-    "ppay": "./ppay"
+    "ppay": "./ppay",
+    "txanalyzer": "./txanalyzer"
   },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "ppay": "node --experimental-strip-types ./scripts/ppay.ts"
+    "ppay": "node --experimental-strip-types ./scripts/ppay.ts",
+    "txanalyzer": "node --experimental-strip-types ./scripts/txanalyzer.ts"
   },
   "dependencies": {
     "@bonfida/spl-name-service": "^3.0.20",
