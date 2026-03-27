@@ -453,7 +453,8 @@ function writeTransactionDump(
 function writeBalanceDump(
   outputDir: string,
   snapshot: AddressBalanceSnapshot,
-  phase: "before" | "after"
+  phase: "before" | "after",
+  extra?: Record<string, string | number | boolean>
 ) {
   const filePath = path.join(outputDir, `${getExportBaseName(snapshot)}_${phase}.json`);
   writeFileSync(
@@ -461,8 +462,8 @@ function writeBalanceDump(
     `${JSON.stringify(
       {
         address: snapshot.address,
-        usdcBalanceBaseUnits: snapshot.usdcBalance.toString(),
         usdcBalance: formatBaseUnits(snapshot.usdcBalance, USDC_DECIMALS),
+        ...(extra ?? {}),
       },
       null,
       2
@@ -478,7 +479,6 @@ function writeResultDump(
     doubleSpendDetected: boolean;
     stoppedEarly: boolean;
     balanceCheck: "matched" | "positive_diff" | "negative_diff";
-    balanceDiffBaseUnits: string;
     balanceDiff: string;
   }
 ) {
@@ -922,8 +922,31 @@ async function main() {
   addressBalancesBefore.forEach((snapshot) => {
     writeBalanceDump(outputDir, snapshot, "before");
   });
+  const commonNewTxCount = signatures.length;
   addressBalancesAfter.forEach((snapshot) => {
-    writeBalanceDump(outputDir, snapshot, "after");
+    const beforeBalance = addressBalancesBefore.find(
+      (item) => item.address === snapshot.address
+    )!;
+    const balanceChange = snapshot.usdcBalance - beforeBalance.usdcBalance;
+    const extra: Record<string, string | number | boolean> = {
+      commonNewTxCount,
+      balanceChange: formatBaseUnits(balanceChange, USDC_DECIMALS),
+    };
+
+    if (snapshot.label === "from") {
+      extra.transfersCompleted = completedTransfers;
+      extra.doubleSpendDetected = doubleSpendDetected;
+    }
+
+    if (snapshot.label === "to") {
+      extra.usdcIncrease = formatBaseUnits(balanceChange, USDC_DECIMALS);
+    }
+
+    if (snapshot.label === "vault") {
+      extra.vaultBalanceChange = formatBaseUnits(balanceChange, USDC_DECIMALS);
+    }
+
+    writeBalanceDump(outputDir, snapshot, "after", extra);
   });
   for (const snapshot of slotSnapshots) {
     const addressKey = new PublicKey(snapshot.address);
@@ -961,7 +984,6 @@ async function main() {
     stoppedEarly: doubleSpendDetected && completedTransfers < ntimes,
     balanceCheck:
       balanceDiff === 0n ? "matched" : balanceDiff > 0n ? "positive_diff" : "negative_diff",
-    balanceDiffBaseUnits: balanceDiff.toString(),
     balanceDiff: formatBaseUnits(balanceDiff, USDC_DECIMALS),
   });
 }
