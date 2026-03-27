@@ -563,6 +563,7 @@ function getTransactionAccountAtIndex(transaction: unknown, index: number) {
 }
 
 function runActionsShuttle(runDirectory: string) {
+  const shuttleWalletIndex = 14;
   const actionsPath = path.join(runDirectory, "actions_shuttle.json");
   if (!existsSync(actionsPath)) {
     throw new Error(`Missing ${actionsPath}. Run: txanalyzer fetch-actions-shuttle ${runDirectory}`);
@@ -570,7 +571,7 @@ function runActionsShuttle(runDirectory: string) {
 
   const actionsDump = readActionsShuttleDump(actionsPath);
   const accountValues = actionsDump.actions.map((action) => ({
-    account: getTransactionAccountAtIndex(action.transaction, 14),
+    account: getTransactionAccountAtIndex(action.transaction, shuttleWalletIndex),
     signature: action.signature,
   }));
   const accountCounts = new Map<string, number>();
@@ -591,15 +592,15 @@ function runActionsShuttle(runDirectory: string) {
   console.log(`${colorize("DIR ", ANSI_CYAN)} ${runDirectory}`);
   console.log(`${colorize("SRC ", ANSI_CYAN)} ${actionsPath}`);
   console.log(
-    `${colorize("INFO", ANSI_CYAN)} printing account index 14 for ${bold(String(accountValues.length))} action transaction(s)`
+    `${colorize("INFO", ANSI_CYAN)} printing account index ${shuttleWalletIndex} for ${bold(String(accountValues.length))} action transaction(s)`
   );
 
   if (duplicates.length === 0) {
-    console.log(colorize("UNIQ all accountKeys[14] values are unique", ANSI_GREEN));
+    console.log(colorize(`UNIQ all accountKeys[${shuttleWalletIndex}] values are unique`, ANSI_GREEN));
   } else {
     console.log(
       colorize(
-        `DUPL found ${duplicates.length} duplicated accountKeys[14] value(s)`,
+        `DUPL found ${duplicates.length} duplicated accountKeys[${shuttleWalletIndex}] value(s)`,
         ANSI_RED
       )
     );
