@@ -1,4 +1,4 @@
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { Connection, PublicKey } from "@solana/web3.js";
@@ -60,6 +60,17 @@ interface ShuttleWalletDump {
   }>;
 }
 
+interface ActionsShuttleDump {
+  erRpcEndpoint: string;
+  sourceFile: string;
+  sourceActionSignatureCount: number;
+  actions: Array<{
+    signature: string;
+    occurrenceCount: number;
+    transaction: unknown;
+  }>;
+}
+
 function colorize(value: string, color: string) {
   return `${color}${value}${ANSI_RESET}`;
 }
@@ -77,9 +88,13 @@ function usage() {
   console.error("Modes:");
   console.error("  fetch-shuttle  Fetch shuttle wallet transactions from from_tx.json");
   console.error("  actions-sig    Read from_shuttle_wallet.json and print sorted actions_tx_sig values");
+  console.error("  fetch-actions-shuttle  Fetch parsed transactions for actions_tx_sig values");
+  console.error("  actions-shuttle  Read actions_shuttle.json and print accountKeys[14]");
   console.error("Examples:");
   console.error("  txanalyzer fetch-shuttle store/4.451349229_451349230_451349230");
   console.error("  txanalyzer actions-sig store/4.451349229_451349230_451349230");
+  console.error("  txanalyzer fetch-actions-shuttle store/4.451349229_451349230_451349230");
+  console.error("  txanalyzer actions-shuttle store/4.451349229_451349230_451349230");
 }
 
 function logWait(reason: string, ms: number) {
@@ -121,6 +136,11 @@ function readTxDump(filePath: string) {
 function readShuttleWalletDump(filePath: string) {
   const raw = readFileSync(filePath, "utf8");
   return JSON.parse(raw) as ShuttleWalletDump;
+}
+
+function readActionsShuttleDump(filePath: string) {
+  const raw = readFileSync(filePath, "utf8");
+  return JSON.parse(raw) as ActionsShuttleDump;
 }
 
 function extractShuttleWallets(dump: TxDump) {
@@ -301,6 +321,17 @@ async function getAllTransactionsForAddress(connection: Connection, address: Pub
   return transactions;
 }
 
+async function getParsedTransactionForSignature(connection: Connection, signature: string) {
+  return withRpcRetry(
+    () =>
+      connection.getParsedTransaction(signature, {
+        commitment: "confirmed",
+        maxSupportedTransactionVersion: 0,
+      }),
+    `parsed tx ${signature}`
+  );
+}
+
 async function runFetchShuttle(runDirectory: string) {
   const fromTxPath = path.join(runDirectory, "from_tx.json");
   const fromTxDump = readTxDump(fromTxPath);
@@ -433,6 +464,158 @@ function runActionsSig(runDirectory: string) {
   }
 }
 
+async function runFetchActionsShuttle(runDirectory: string) {
+  const shuttleWalletPath = path.join(runDirectory, "from_shuttle_wallet.json");
+  const outputPath = path.join(runDirectory, "actions_shuttle.json");
+  const shuttleWalletDump = readShuttleWalletDump(shuttleWalletPath);
+  const actionSignatures = extractActionSignatures(shuttleWalletDump);
+  const connection = new Connection(ER_RPC_ENDPOINT, "confirmed");
+  const cachedDump = existsSync(outputPath) ? readActionsShuttleDump(outputPath) : null;
+  const cachedActions = new Map(
+    (cachedDump?.actions ?? []).map((action) => [action.signature, action])
+  );
+  const actions = [];
+  const missingSignatures = actionSignatures.signatures.filter(
+    (signature) => !cachedActions.has(signature)
+  );
+
+  console.log(`${colorize("■", ANSI_CYAN)} ${bold("Shuttle Wallet Analyzer")}`);
+  console.log(`${colorize("MODE", ANSI_CYAN)} fetch-actions-shuttle`);
+  console.log(`${colorize("DIR ", ANSI_CYAN)} ${runDirectory}`);
+  console.log(`${colorize("SRC ", ANSI_CYAN)} ${shuttleWalletPath}`);
+  console.log(`${colorize("RPC ", ANSI_CYAN)} ${ER_RPC_ENDPOINT}`);
+  console.log(
+    `${colorize("INFO", ANSI_CYAN)} found ${bold(String(actionSignatures.signatures.length))} unique actions_tx_sig value(s)`
+  );
+
+  if (actionSignatures.duplicates.length === 0) {
+    console.log(colorize("UNIQ all actions_tx_sig values are unique", ANSI_GREEN));
+  } else {
+    console.log(
+      colorize(
+        `DUPL found ${actionSignatures.duplicates.length} duplicated actions_tx_sig value(s)`,
+        ANSI_RED
+      )
+    );
+    for (const duplicate of actionSignatures.duplicates) {
+      console.log(`${ANSI_BOLD}${ANSI_RED}${duplicate.signature}${ANSI_RESET} count=${duplicate.count}`);
+    }
+  }
+
+  console.log(
+    `${colorize("INFO", ANSI_CYAN)} cache hit ${bold(String(cachedActions.size))}, missing ${bold(String(missingSignatures.length))}`
+  );
+
+  for (const [index, signature] of missingSignatures.entries()) {
+    console.log(`${colorize("FETCH", ANSI_CYAN)} ${index + 1}/${missingSignatures.length} ${signature}`);
+    const transaction = await getParsedTransactionForSignature(connection, signature);
+    cachedActions.set(signature, {
+      signature,
+      occurrenceCount: actionSignatures.signatureCounts.get(signature) ?? 0,
+      transaction,
+    });
+  }
+
+  for (const signature of actionSignatures.signatures) {
+    actions.push({
+      signature,
+      occurrenceCount: actionSignatures.signatureCounts.get(signature) ?? 0,
+      transaction: cachedActions.get(signature)?.transaction ?? null,
+    });
+  }
+
+  writeFileSync(
+    outputPath,
+    `${JSON.stringify(
+      {
+        erRpcEndpoint: ER_RPC_ENDPOINT,
+        sourceFile: "from_shuttle_wallet.json",
+        sourceActionSignatureCount: actionSignatures.signatures.length,
+        actions,
+      },
+      null,
+      2
+    )}\n`
+  );
+
+  console.log("");
+  console.log(`${colorize("SAVE", ANSI_GREEN)} ${outputPath}`);
+}
+
+function getTransactionAccountAtIndex(transaction: unknown, index: number) {
+  const accountKey = (transaction as {
+    transaction?: {
+      message?: {
+        accountKeys?: Array<string | { pubkey?: string }>;
+      };
+    };
+  } | null)?.transaction?.message?.accountKeys?.[index];
+
+  if (typeof accountKey === "string") {
+    return accountKey;
+  }
+
+  if (accountKey && typeof accountKey === "object" && typeof accountKey.pubkey === "string") {
+    return accountKey.pubkey;
+  }
+
+  return null;
+}
+
+function runActionsShuttle(runDirectory: string) {
+  const actionsPath = path.join(runDirectory, "actions_shuttle.json");
+  if (!existsSync(actionsPath)) {
+    throw new Error(`Missing ${actionsPath}. Run: txanalyzer fetch-actions-shuttle ${runDirectory}`);
+  }
+
+  const actionsDump = readActionsShuttleDump(actionsPath);
+  const accountValues = actionsDump.actions.map((action) => ({
+    account: getTransactionAccountAtIndex(action.transaction, 14),
+    signature: action.signature,
+  }));
+  const accountCounts = new Map<string, number>();
+
+  for (const item of accountValues) {
+    if (!item.account) continue;
+    accountCounts.set(item.account, (accountCounts.get(item.account) ?? 0) + 1);
+  }
+
+  const duplicates = Array.from(accountCounts.entries())
+    .map(([account, count]) => ({ account, count }))
+    .filter((item) => item.count > 1)
+    .sort((left, right) => left.account.localeCompare(right.account));
+  const indexWidth = String(accountValues.length).length;
+
+  console.log(`${colorize("■", ANSI_CYAN)} ${bold("Shuttle Wallet Analyzer")}`);
+  console.log(`${colorize("MODE", ANSI_CYAN)} actions-shuttle`);
+  console.log(`${colorize("DIR ", ANSI_CYAN)} ${runDirectory}`);
+  console.log(`${colorize("SRC ", ANSI_CYAN)} ${actionsPath}`);
+  console.log(
+    `${colorize("INFO", ANSI_CYAN)} printing account index 14 for ${bold(String(accountValues.length))} action transaction(s)`
+  );
+
+  if (duplicates.length === 0) {
+    console.log(colorize("UNIQ all accountKeys[14] values are unique", ANSI_GREEN));
+  } else {
+    console.log(
+      colorize(
+        `DUPL found ${duplicates.length} duplicated accountKeys[14] value(s)`,
+        ANSI_RED
+      )
+    );
+    for (const duplicate of duplicates) {
+      console.log(`${ANSI_BOLD}${ANSI_RED}${duplicate.account}${ANSI_RESET} count=${duplicate.count}`);
+    }
+  }
+
+  for (const [index, item] of accountValues.entries()) {
+    const label = item.account ?? "<missing>";
+    console.log(
+      `${String(index + 1).padStart(indexWidth, " ")}. ${label}${item.account ? "" : ` ${dim(`(signature=${item.signature})`)}`}`
+    );
+  }
+}
+
 async function main() {
   const [, , modeArg, runDirectoryArg] = process.argv;
   if (!modeArg || !runDirectoryArg) {
@@ -450,6 +633,16 @@ async function main() {
 
   if (modeArg === "actions-sig") {
     runActionsSig(runDirectory);
+    return;
+  }
+
+  if (modeArg === "fetch-actions-shuttle") {
+    await runFetchActionsShuttle(runDirectory);
+    return;
+  }
+
+  if (modeArg === "actions-shuttle") {
+    runActionsShuttle(runDirectory);
     return;
   }
 
