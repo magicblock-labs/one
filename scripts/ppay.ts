@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -11,6 +11,7 @@ const DEFAULT_MAINNET_RPC_ENDPOINT = "https://rpc.magicblock.app/mainnet";
 const DEFAULT_DEVNET_RPC_ENDPOINT = "https://api.devnet.solana.com";
 const DEFAULT_DEVNET_USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 const DEFAULT_MAINNET_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const DEVNET_VAULT = "TEy2XnwbueFzCMTAJhgxa4vrWb3N1Dhe4ANy4CgVr3r";
 const MAX_PRIVATE_DELAY_MS = 30 * 60 * 1000;
 const USDC_DECIMALS = 6;
 const TRANSFER_DELAY_MS = 500;
@@ -18,6 +19,10 @@ const BALANCE_SETTLE_ATTEMPTS = 5;
 const BALANCE_SETTLE_DELAY_MS = 500;
 const RATE_LIMIT_RETRY_DELAY_MS = 5_000;
 const DEFAULT_RETRY_DELAY_MS = 2_000;
+const EXPORT_SETTLE_DELAY_MS = 2_000;
+const EXPORT_PAGE_DELAY_MS = 400;
+const EXPORT_TX_DELAY_MS = 350;
+const RPC_RETRY_ATTEMPTS = 6;
 const ANSI_RESET = "\u001b[0m";
 const ANSI_BOLD = "\u001b[1m";
 const ANSI_DIM = "\u001b[2m";
@@ -43,6 +48,12 @@ interface UnsignedPaymentTransaction {
 interface WalletUsdcBalances {
   from: bigint;
   to: bigint;
+}
+
+interface AddressSlotSnapshot {
+  address: string;
+  label: string;
+  slot: number;
 }
 
 function printUsage() {
@@ -198,6 +209,14 @@ function getRetryDelayMs(message: string) {
     : DEFAULT_RETRY_DELAY_MS;
 }
 
+function isRateLimitError(message: string) {
+  return /too many requests|429/i.test(message);
+}
+
+function getRpcRetryDelayMs(attempt: number) {
+  return Math.min(8_000, 500 * 2 ** (attempt - 1));
+}
+
 function expandHome(filePath: string) {
   if (filePath === "~") return os.homedir();
   if (filePath.startsWith("~/")) {
@@ -257,15 +276,144 @@ function parsePublicKey(value: string, fieldName: string) {
   }
 }
 
+async function getLatestAddressSlot(connection: Connection, address: PublicKey) {
+  const [latest] = await withRpcRetry(
+    () => connection.getSignaturesForAddress(address, { limit: 1 }, "confirmed"),
+    `latest slot for ${shortenAddress(address.toBase58())}`
+  );
+  return latest?.slot ?? 0;
+}
+
+async function withRpcRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= RPC_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error: unknown) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!isRateLimitError(message) || attempt === RPC_RETRY_ATTEMPTS) {
+        throw error;
+      }
+
+      const delayMs = getRpcRetryDelayMs(attempt);
+      printStatus(
+        "RPC  ",
+        `${label} hit rate limit. Retry ${attempt}/${RPC_RETRY_ATTEMPTS} in ${delayMs}ms`,
+        ANSI_YELLOW
+      );
+      await sleep(delayMs);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+async function collectNewTransactions(
+  connection: Connection,
+  address: PublicKey,
+  baselineSlot: number
+) {
+  const signatures: Array<{
+    blockTime: number | null;
+    confirmationStatus?: string;
+    err: unknown;
+    memo: string | null;
+    signature: string;
+    slot: number;
+  }> = [];
+  let before: string | undefined;
+
+  while (true) {
+    const page = await withRpcRetry(
+      () =>
+        connection.getSignaturesForAddress(
+          address,
+          { before, limit: 100 },
+          "confirmed"
+        ),
+      `signatures for ${shortenAddress(address.toBase58())}`
+    );
+
+    if (page.length === 0) break;
+
+    for (const item of page) {
+      if (item.slot <= baselineSlot) {
+        before = undefined;
+        break;
+      }
+
+      signatures.push({
+        blockTime: item.blockTime,
+        confirmationStatus: item.confirmationStatus ?? undefined,
+        err: item.err,
+        memo: item.memo,
+        signature: item.signature,
+        slot: item.slot,
+      });
+    }
+
+    const reachedBaseline = page.some((item) => item.slot <= baselineSlot);
+    if (reachedBaseline) break;
+    before = page[page.length - 1]?.signature;
+    await sleep(EXPORT_PAGE_DELAY_MS);
+  }
+
+  const parsedTransactions = [];
+  for (const item of signatures) {
+    const parsedTransaction = await withRpcRetry(
+      () =>
+        connection.getParsedTransaction(item.signature, {
+          commitment: "confirmed",
+          maxSupportedTransactionVersion: 0,
+        }),
+      `parsed tx ${shortenAddress(item.signature)}`
+    );
+    parsedTransactions.push(
+      {
+        ...item,
+        transaction: parsedTransaction ?? null,
+      }
+    );
+    await sleep(EXPORT_TX_DELAY_MS);
+  }
+
+  return parsedTransactions;
+}
+
+function writeTransactionDump(
+  outputDir: string,
+  snapshot: AddressSlotSnapshot,
+  transactions: unknown[],
+  usdcBalance: bigint
+) {
+  const filePath = path.join(outputDir, `${snapshot.label}.json`);
+  writeFileSync(
+    filePath,
+    `${JSON.stringify(
+      {
+        address: snapshot.address,
+        baselineSlot: snapshot.slot,
+        usdcBalanceBaseUnits: usdcBalance.toString(),
+        usdcBalance: formatBaseUnits(usdcBalance, USDC_DECIMALS),
+        newTransactionCount: transactions.length,
+        transactions,
+      },
+      null,
+      2
+    )}\n`
+  );
+}
+
 async function getWalletMintBalance(
   connection: Connection,
   owner: PublicKey,
   mint: PublicKey
 ) {
-  const accounts = await connection.getParsedTokenAccountsByOwner(
-    owner,
-    { mint },
-    "confirmed"
+  const accounts = await withRpcRetry(
+    () => connection.getParsedTokenAccountsByOwner(owner, { mint }, "confirmed"),
+    `token balance for ${shortenAddress(owner.toBase58())}`
   );
 
   return accounts.value.reduce((total, account) => {
@@ -383,6 +531,7 @@ async function main() {
   const rpcEndpoint = getRpcEndpoint(cluster);
   const connection = new Connection(rpcEndpoint, "confirmed");
   const fromKey = signer.publicKey;
+  const vaultKey = parsePublicKey(DEVNET_VAULT, "vault");
 
   printSection("Private USDC Transfer", ANSI_CYAN);
   printKeyValue("Amount", `${bold(amountArg)} USDC x ${bold(String(ntimes))}`);
@@ -398,6 +547,28 @@ async function main() {
       ANSI_YELLOW
     )} split=${colorize(String(split), ANSI_YELLOW)}`
   );
+
+  const slotSnapshots: AddressSlotSnapshot[] = [
+    {
+      label: "from",
+      address: signerAddress,
+      slot: await getLatestAddressSlot(connection, fromKey),
+    },
+    {
+      label: "to",
+      address: toAddress,
+      slot: await getLatestAddressSlot(connection, to),
+    },
+    {
+      label: "vault",
+      address: vaultKey.toBase58(),
+      slot: await getLatestAddressSlot(connection, vaultKey),
+    },
+  ];
+  printSection("Slot Snapshot", ANSI_YELLOW);
+  slotSnapshots.forEach((snapshot) => {
+    printKeyValue(snapshot.label, colorize(String(snapshot.slot), ANSI_YELLOW));
+  });
 
   const balancesBefore = await getWalletUsdcBalances(
     connection,
@@ -561,6 +732,36 @@ async function main() {
   signatures.forEach((signature, index) => {
     console.log(`  ${dim(String(index + 1).padStart(2, "0"))} ${signature}`);
   });
+
+  const outputDir = path.join(
+    process.cwd(),
+    `${slotSnapshots[0]!.slot}_${slotSnapshots[1]!.slot}_${slotSnapshots[2]!.slot}`
+  );
+  mkdirSync(outputDir, { recursive: true });
+
+  printSection("Transaction Export", ANSI_CYAN);
+  printStatus(
+    "WAIT ",
+    `Letting RPC/indexer settle for ${EXPORT_SETTLE_DELAY_MS}ms before export`,
+    ANSI_YELLOW
+  );
+  await sleep(EXPORT_SETTLE_DELAY_MS);
+  for (const snapshot of slotSnapshots) {
+    const addressKey = new PublicKey(snapshot.address);
+    const transactions = await collectNewTransactions(
+      connection,
+      addressKey,
+      snapshot.slot
+    );
+    const usdcBalance = await getWalletMintBalance(connection, addressKey, usdcMintKey);
+    writeTransactionDump(outputDir, snapshot, transactions, usdcBalance);
+    printKeyValue(
+      snapshot.label,
+      `${transactions.length} new tx, ${formatBaseUnits(usdcBalance, USDC_DECIMALS)} USDC ${dim(
+        path.join(outputDir, `${snapshot.label}.json`)
+      )}`
+    );
+  }
 }
 
 main().catch((error: unknown) => {
