@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -12,6 +12,7 @@ const DEFAULT_DEVNET_RPC_ENDPOINT = "https://api.devnet.solana.com";
 const DEFAULT_DEVNET_USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 const DEFAULT_MAINNET_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const DEVNET_VAULT = "TEy2XnwbueFzCMTAJhgxa4vrWb3N1Dhe4ANy4CgVr3r";
+const STORE_DIR = "store";
 const MAX_PRIVATE_DELAY_MS = 30 * 60 * 1000;
 const USDC_DECIMALS = 6;
 const TRANSFER_DELAY_MS = 500;
@@ -22,7 +23,6 @@ const DEFAULT_RETRY_DELAY_MS = 2_000;
 const EXPORT_SETTLE_DELAY_MS = 2_000;
 const EXPORT_PAGE_DELAY_MS = 400;
 const EXPORT_TX_DELAY_MS = 350;
-const RPC_RETRY_ATTEMPTS = 6;
 const ANSI_RESET = "\u001b[0m";
 const ANSI_BOLD = "\u001b[1m";
 const ANSI_DIM = "\u001b[2m";
@@ -54,6 +54,12 @@ interface AddressSlotSnapshot {
   address: string;
   label: string;
   slot: number;
+}
+
+interface AddressBalanceSnapshot {
+  address: string;
+  label: string;
+  usdcBalance: bigint;
 }
 
 function printUsage() {
@@ -199,14 +205,46 @@ function shortenAddress(value: string) {
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
+function getExportBaseName(snapshot: { label: string }) {
+  return snapshot.label;
+}
+
+function getNextRunDirectoryName(storeDir: string, slotSnapshots: AddressSlotSnapshot[]) {
+  mkdirSync(storeDir, { recursive: true });
+
+  const nextIndex =
+    readdirSync(storeDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => {
+        const match = entry.name.match(/^(\d+)\./);
+        return match ? Number.parseInt(match[1], 10) : 0;
+      })
+      .reduce((max, value) => Math.max(max, value), 0) + 1;
+
+  const slotSuffix = slotSnapshots.map((snapshot) => snapshot.slot).join("_");
+  return `${nextIndex}.${slotSuffix}`;
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function getRetryDelayMs(message: string) {
-  return /too many requests/i.test(message)
-    ? RATE_LIMIT_RETRY_DELAY_MS
-    : DEFAULT_RETRY_DELAY_MS;
+function getSteppedBackoffDelayMs(baseDelayMs: number, attempt: number) {
+  let delayMs = baseDelayMs;
+
+  for (let currentAttempt = 1; currentAttempt < attempt; currentAttempt += 1) {
+    delayMs = delayMs < 16_000 ? Math.min(16_000, delayMs * 2) : Math.min(60_000, delayMs + 4_000);
+  }
+
+  return Math.min(60_000, delayMs);
+}
+
+function getRetryDelayMs(message: string, attempt: number) {
+  if (!/too many requests/i.test(message)) {
+    return DEFAULT_RETRY_DELAY_MS;
+  }
+
+  return getSteppedBackoffDelayMs(RATE_LIMIT_RETRY_DELAY_MS, attempt);
 }
 
 function isRateLimitError(message: string) {
@@ -214,7 +252,7 @@ function isRateLimitError(message: string) {
 }
 
 function getRpcRetryDelayMs(attempt: number) {
-  return Math.min(8_000, 500 * 2 ** (attempt - 1));
+  return getSteppedBackoffDelayMs(500, attempt);
 }
 
 function expandHome(filePath: string) {
@@ -285,29 +323,27 @@ async function getLatestAddressSlot(connection: Connection, address: PublicKey) 
 }
 
 async function withRpcRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
-  let lastError: unknown;
+  let attempt = 1;
 
-  for (let attempt = 1; attempt <= RPC_RETRY_ATTEMPTS; attempt += 1) {
+  while (true) {
     try {
       return await fn();
     } catch (error: unknown) {
-      lastError = error;
       const message = error instanceof Error ? error.message : String(error);
-      if (!isRateLimitError(message) || attempt === RPC_RETRY_ATTEMPTS) {
+      if (!isRateLimitError(message)) {
         throw error;
       }
 
       const delayMs = getRpcRetryDelayMs(attempt);
       printStatus(
         "RPC  ",
-        `${label} hit rate limit. Retry ${attempt}/${RPC_RETRY_ATTEMPTS} in ${delayMs}ms`,
+        `${label} hit rate limit. Waiting ${delayMs}ms before retry ${attempt + 1}`,
         ANSI_YELLOW
       );
       await sleep(delayMs);
+      attempt += 1;
     }
   }
-
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 async function collectNewTransactions(
@@ -385,20 +421,37 @@ async function collectNewTransactions(
 function writeTransactionDump(
   outputDir: string,
   snapshot: AddressSlotSnapshot,
-  transactions: unknown[],
-  usdcBalance: bigint
+  transactions: unknown[]
 ) {
-  const filePath = path.join(outputDir, `${snapshot.label}.json`);
+  const filePath = path.join(outputDir, `${getExportBaseName(snapshot)}_tx.json`);
   writeFileSync(
     filePath,
     `${JSON.stringify(
       {
         address: snapshot.address,
         baselineSlot: snapshot.slot,
-        usdcBalanceBaseUnits: usdcBalance.toString(),
-        usdcBalance: formatBaseUnits(usdcBalance, USDC_DECIMALS),
         newTransactionCount: transactions.length,
         transactions,
+      },
+      null,
+      2
+    )}\n`
+  );
+}
+
+function writeBalanceDump(
+  outputDir: string,
+  snapshot: AddressBalanceSnapshot,
+  phase: "before" | "after"
+) {
+  const filePath = path.join(outputDir, `${getExportBaseName(snapshot)}_${phase}.json`);
+  writeFileSync(
+    filePath,
+    `${JSON.stringify(
+      {
+        address: snapshot.address,
+        usdcBalanceBaseUnits: snapshot.usdcBalance.toString(),
+        usdcBalance: formatBaseUnits(snapshot.usdcBalance, USDC_DECIMALS),
       },
       null,
       2
@@ -435,6 +488,26 @@ async function getWalletUsdcBalances(
   ]);
 
   return { from: fromBalance, to: toBalance };
+}
+
+async function getAddressBalanceSnapshots(
+  connection: Connection,
+  snapshots: AddressSlotSnapshot[],
+  usdcMint: PublicKey
+): Promise<AddressBalanceSnapshot[]> {
+  const balances = await Promise.all(
+    snapshots.map(async (snapshot) => ({
+      address: snapshot.address,
+      label: snapshot.label,
+      usdcBalance: await getWalletMintBalance(
+        connection,
+        new PublicKey(snapshot.address),
+        usdcMint
+      ),
+    }))
+  );
+
+  return balances;
 }
 
 function getBalanceDiff(before: WalletUsdcBalances, after: WalletUsdcBalances) {
@@ -576,6 +649,11 @@ async function main() {
     to,
     usdcMintKey
   );
+  const addressBalancesBefore = await getAddressBalanceSnapshots(
+    connection,
+    slotSnapshots,
+    usdcMintKey
+  );
   logWalletUsdcBalances("Before", balancesBefore);
 
   const signatures: string[] = [];
@@ -651,7 +729,7 @@ async function main() {
         break;
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        const retryDelayMs = getRetryDelayMs(message);
+        const retryDelayMs = getRetryDelayMs(message, attempt);
         printStatus("ERR  ", message, ANSI_RED);
         printStatus(
           "RETRY",
@@ -712,6 +790,11 @@ async function main() {
   }
 
   logWalletUsdcBalances("After", finalBalancesAfter);
+  const addressBalancesAfter = await getAddressBalanceSnapshots(
+    connection,
+    slotSnapshots,
+    usdcMintKey
+  );
 
   printSection("Balance Check", ANSI_CYAN);
   if (balanceDiff === 0n) {
@@ -733,19 +816,25 @@ async function main() {
     console.log(`  ${dim(String(index + 1).padStart(2, "0"))} ${signature}`);
   });
 
-  const outputDir = path.join(
-    process.cwd(),
-    `${slotSnapshots[0]!.slot}_${slotSnapshots[1]!.slot}_${slotSnapshots[2]!.slot}`
-  );
+  const storeDir = path.join(process.cwd(), STORE_DIR);
+  const runDirectoryName = getNextRunDirectoryName(storeDir, slotSnapshots);
+  const outputDir = path.join(storeDir, runDirectoryName);
   mkdirSync(outputDir, { recursive: true });
 
   printSection("Transaction Export", ANSI_CYAN);
+  printKeyValue("Store", dim(outputDir));
   printStatus(
     "WAIT ",
     `Letting RPC/indexer settle for ${EXPORT_SETTLE_DELAY_MS}ms before export`,
     ANSI_YELLOW
   );
   await sleep(EXPORT_SETTLE_DELAY_MS);
+  addressBalancesBefore.forEach((snapshot) => {
+    writeBalanceDump(outputDir, snapshot, "before");
+  });
+  addressBalancesAfter.forEach((snapshot) => {
+    writeBalanceDump(outputDir, snapshot, "after");
+  });
   for (const snapshot of slotSnapshots) {
     const addressKey = new PublicKey(snapshot.address);
     const transactions = await collectNewTransactions(
@@ -753,13 +842,25 @@ async function main() {
       addressKey,
       snapshot.slot
     );
-    const usdcBalance = await getWalletMintBalance(connection, addressKey, usdcMintKey);
-    writeTransactionDump(outputDir, snapshot, transactions, usdcBalance);
+    writeTransactionDump(outputDir, snapshot, transactions);
+    const beforeBalance = addressBalancesBefore.find(
+      (item) => item.address === snapshot.address
+    )!;
+    const afterBalance = addressBalancesAfter.find(
+      (item) => item.address === snapshot.address
+    )!;
     printKeyValue(
       snapshot.label,
-      `${transactions.length} new tx, ${formatBaseUnits(usdcBalance, USDC_DECIMALS)} USDC ${dim(
-        path.join(outputDir, `${snapshot.label}.json`)
+      `${transactions.length} new tx ${dim(
+        path.join(outputDir, `${getExportBaseName(snapshot)}_tx.json`)
       )}`
+    );
+    printKeyValue(
+      `${snapshot.label} bal`,
+      `${formatBaseUnits(beforeBalance.usdcBalance, USDC_DECIMALS)} -> ${formatBaseUnits(
+        afterBalance.usdcBalance,
+        USDC_DECIMALS
+      )} USDC`
     );
   }
 }
