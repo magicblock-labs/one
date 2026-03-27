@@ -16,6 +16,8 @@ const STORE_DIR = "store";
 const MAX_PRIVATE_DELAY_MS = 30 * 60 * 1000;
 const USDC_DECIMALS = 6;
 const TRANSFER_DELAY_MS = 500;
+const CHECKPOINT_INTERVAL = 10;
+const CHECKPOINT_DELAY_MS = 10_000;
 const BALANCE_SETTLE_ATTEMPTS = 5;
 const BALANCE_SETTLE_DELAY_MS = 500;
 const RATE_LIMIT_RETRY_DELAY_MS = 5_000;
@@ -60,6 +62,11 @@ interface AddressBalanceSnapshot {
   address: string;
   label: string;
   usdcBalance: bigint;
+}
+
+interface BalanceCheckResult {
+  balances: WalletUsdcBalances;
+  diff: bigint;
 }
 
 function printUsage() {
@@ -178,6 +185,10 @@ function colorize(value: string, color: string) {
 
 function bold(value: string) {
   return colorize(value, ANSI_BOLD);
+}
+
+function boldRed(value: string) {
+  return `${ANSI_BOLD}${ANSI_RED}${value}${ANSI_RESET}`;
 }
 
 function dim(value: string) {
@@ -459,6 +470,22 @@ function writeBalanceDump(
   );
 }
 
+function writeResultDump(
+  outputDir: string,
+  result: {
+    completedTransfers: number;
+    requestedTransfers: number;
+    doubleSpendDetected: boolean;
+    stoppedEarly: boolean;
+    balanceCheck: "matched" | "positive_diff" | "negative_diff";
+    balanceDiffBaseUnits: string;
+    balanceDiff: string;
+  }
+) {
+  const filePath = path.join(outputDir, "result.json");
+  writeFileSync(filePath, `${JSON.stringify(result, null, 2)}\n`);
+}
+
 async function getWalletMintBalance(
   connection: Connection,
   owner: PublicKey,
@@ -512,6 +539,20 @@ async function getAddressBalanceSnapshots(
 
 function getBalanceDiff(before: WalletUsdcBalances, after: WalletUsdcBalances) {
   return after.from + after.to - (before.from + before.to);
+}
+
+async function getBalanceCheckResult(
+  connection: Connection,
+  before: WalletUsdcBalances,
+  from: PublicKey,
+  to: PublicKey,
+  usdcMint: PublicKey
+): Promise<BalanceCheckResult> {
+  const balances = await getWalletUsdcBalances(connection, from, to, usdcMint);
+  return {
+    balances,
+    diff: getBalanceDiff(before, balances),
+  };
 }
 
 function logWalletUsdcBalances(label: string, balances: WalletUsdcBalances) {
@@ -657,6 +698,8 @@ async function main() {
   logWalletUsdcBalances("Before", balancesBefore);
 
   const signatures: string[] = [];
+  let completedTransfers = 0;
+  let doubleSpendDetected = false;
 
   for (let index = 0; index < ntimes; index += 1) {
     const current = index + 1;
@@ -721,6 +764,7 @@ async function main() {
         }
 
         signatures.push(signature);
+        completedTransfers += 1;
         printStatus(
           "OK   ",
           `${shortenAddress(signature)} ${dim(signature)}`,
@@ -738,6 +782,52 @@ async function main() {
         );
         attempt += 1;
         await sleep(retryDelayMs);
+      }
+    }
+
+    if (
+      completedTransfers > 0 &&
+      completedTransfers % CHECKPOINT_INTERVAL === 0 &&
+      current < ntimes
+    ) {
+      printSection(`Checkpoint ${completedTransfers}`, ANSI_CYAN);
+      printStatus(
+        "WAIT ",
+        `Completed ${completedTransfers} transfers. Waiting ${CHECKPOINT_DELAY_MS}ms before balance check`,
+        ANSI_YELLOW
+      );
+      await sleep(CHECKPOINT_DELAY_MS);
+
+      const checkpointResult = await getBalanceCheckResult(
+        connection,
+        balancesBefore,
+        fromKey,
+        to,
+        usdcMintKey
+      );
+
+      logWalletUsdcBalances(`Checkpoint ${completedTransfers}`, checkpointResult.balances);
+      if (checkpointResult.diff > 0n) {
+        console.log(
+          boldRed(
+            `DOUBLE-SPEND DETECTED: positive diff ${formatBaseUnits(
+              checkpointResult.diff,
+              USDC_DECIMALS
+            )} USDC after ${completedTransfers} transfers`
+          )
+        );
+        doubleSpendDetected = true;
+        break;
+      }
+
+      if (checkpointResult.diff === 0n) {
+        printStatus("CHK  ", "Balance check matched. Continuing.", ANSI_GREEN);
+      } else {
+        printStatus(
+          "CHK  ",
+          `Balance mismatch ${formatBaseUnits(checkpointResult.diff, USDC_DECIMALS)} USDC. Continuing.`,
+          ANSI_YELLOW
+        );
       }
     }
 
@@ -863,6 +953,17 @@ async function main() {
       )} USDC`
     );
   }
+
+  writeResultDump(outputDir, {
+    completedTransfers,
+    requestedTransfers: ntimes,
+    doubleSpendDetected,
+    stoppedEarly: doubleSpendDetected && completedTransfers < ntimes,
+    balanceCheck:
+      balanceDiff === 0n ? "matched" : balanceDiff > 0n ? "positive_diff" : "negative_diff",
+    balanceDiffBaseUnits: balanceDiff.toString(),
+    balanceDiff: formatBaseUnits(balanceDiff, USDC_DECIMALS),
+  });
 }
 
 main().catch((error: unknown) => {
