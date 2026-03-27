@@ -39,6 +39,10 @@ function bold(value: string) {
   return `${ANSI_BOLD}${value}${ANSI_RESET}`;
 }
 
+function dim(value: string) {
+  return `${ANSI_DIM}${value}${ANSI_RESET}`;
+}
+
 function usage() {
   console.error("Usage: txanalyzer <run-directory>");
   console.error("Example: txanalyzer store/4.451349229_451349230_451349230");
@@ -165,9 +169,21 @@ async function getAllTransactionsForAddress(connection: Connection, address: Pub
   }> = [];
   let before: string | undefined;
   let pageNumber = 0;
+  const seenSignatures = new Set<string>();
+  const seenBeforeCursors = new Set<string>();
 
   while (true) {
     pageNumber += 1;
+    if (before) {
+      if (seenBeforeCursors.has(before)) {
+        console.log(
+          `${colorize("STOP ", ANSI_YELLOW)} ${address.toBase58()} repeated cursor ${before}; stopping pagination`
+        );
+        break;
+      }
+      seenBeforeCursors.add(before);
+    }
+
     console.log(
       `${colorize("PAGE ", ANSI_CYAN)} ${address.toBase58()} page ${pageNumber} ${dim(
         `(before=${before ?? "none"})`
@@ -188,19 +204,34 @@ async function getAllTransactionsForAddress(connection: Connection, address: Pub
       break;
     }
 
-    signatures.push(
-      ...page.map((item) => ({
+    let addedOnThisPage = 0;
+    for (const item of page) {
+      if (seenSignatures.has(item.signature)) {
+        continue;
+      }
+
+      seenSignatures.add(item.signature);
+      signatures.push({
         blockTime: item.blockTime,
         confirmationStatus: item.confirmationStatus ?? undefined,
         err: item.err,
         memo: item.memo,
         signature: item.signature,
         slot: item.slot,
-      }))
-    );
+      });
+      addedOnThisPage += 1;
+    }
+
     console.log(
-      `${colorize("PAGE ", ANSI_CYAN)} ${address.toBase58()} page ${pageNumber} got ${page.length} signatures, total ${signatures.length}`
+      `${colorize("PAGE ", ANSI_CYAN)} ${address.toBase58()} page ${pageNumber} got ${page.length} signatures, added ${addedOnThisPage}, total ${signatures.length}`
     );
+
+    if (addedOnThisPage === 0) {
+      console.log(
+        `${colorize("STOP ", ANSI_YELLOW)} ${address.toBase58()} page ${pageNumber} added no new signatures; stopping pagination`
+      );
+      break;
+    }
 
     before = page[page.length - 1]?.signature;
     if (!before) break;
