@@ -35,12 +35,12 @@ import {
 const FAQ_ITEMS = [
   {
     value: "item-0",
-    question: "Is MagicBlock Payment API a mixer?",
+    question: "Is MagicBlock Private Payment API a mixer?",
     answer: (
       <>
         <p>No.</p>
         <p className="mt-3">
-          MagicBlock Payment API is not a mixer and does not rely on pooling or
+          MagicBlock Private Payment API is not a mixer and does not rely on pooling or
           redistributing user funds to obscure ownership.
         </p>
         <p className="mt-3">
@@ -98,15 +98,14 @@ const FAQ_ITEMS = [
     question: "How does MagicBlock support compliance?",
     answer: (
       <>
-        <p>MagicBlock Payment API is designed to support compliance through:</p>
+        <p>MagicBlock Private Payment API is designed to support compliance through:</p>
         <ul className="mt-3 list-disc space-y-1 pl-5">
-          <li>Permissioned execution and policy enforcement</li>
-          <li>AML and risk screening of participating wallets</li>
-          <li>Controlled authorization of fund release from the vault</li>
+          <li>Geo-fencing & Policy-based Access Controls</li>
+          <li>AML risk screening of wallets and transactions</li>
+          <li>EULA & Licensed deployments</li>
         </ul>
         <p className="mt-3">
-          This approach enables privacy-preserving payments while maintaining
-          alignment with compliance requirements.
+          For more information refer to our [compliance framework](https://docs.magicblock.gg/pages/private-ephemeral-rollups-pers/introduction/compliance-framework) 
         </p>
       </>
     ),
@@ -117,14 +116,13 @@ const FAQ_ITEMS = [
     answer: (
       <>
         <p>
-          MagicBlock relies on execution within a Trusted Execution Environment
-          (TEE) to process private intents securely.
+          MagicBlock PERs combine execution within the latest Intel Trusted Domain Extension (TDX) with onchain permission access to process private intents securely.
         </p>
         <p className="mt-3">Users and integrators should consider:</p>
         <ul className="mt-3 list-disc space-y-1 pl-5">
-          <li>The security guarantees and limitations of the TEE</li>
           <li>The correctness of the underlying Solana smart contracts</li>
-          <li>The policies governing access and transaction authorization</li>
+          <li>The correctness of the underlying Solana smart contracts</li>
+          <li>The security guarantees of the hardware manufacturer (Intel TDX)</li>
         </ul>
       </>
     ),
