@@ -1,21 +1,34 @@
 const MAX_BACKOFF_DELAY_MS = 60_000;
 const BACKOFF_STEP_THRESHOLD_MS = 16_000;
+const INITIAL_BACKOFF_MIN_MS = 500;
+const INITIAL_BACKOFF_MAX_MS = 900;
 
 export function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function getRandomInteger(min: number, max: number) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
 export function getBackoffDelayMs(attempt: number) {
-  let delayMs = 500;
+  let minDelayMs = INITIAL_BACKOFF_MIN_MS;
+  let maxDelayMs = INITIAL_BACKOFF_MAX_MS;
 
   for (let currentAttempt = 1; currentAttempt < attempt; currentAttempt += 1) {
-    delayMs =
-      delayMs < BACKOFF_STEP_THRESHOLD_MS
-        ? Math.min(BACKOFF_STEP_THRESHOLD_MS, delayMs * 2)
-        : Math.min(MAX_BACKOFF_DELAY_MS, delayMs + 4_000);
+    if (maxDelayMs < BACKOFF_STEP_THRESHOLD_MS) {
+      minDelayMs = Math.min(BACKOFF_STEP_THRESHOLD_MS, minDelayMs * 2);
+      maxDelayMs = Math.min(BACKOFF_STEP_THRESHOLD_MS, maxDelayMs * 2);
+    } else {
+      minDelayMs = Math.min(MAX_BACKOFF_DELAY_MS, minDelayMs + 4_000);
+      maxDelayMs = Math.min(MAX_BACKOFF_DELAY_MS, maxDelayMs + 4_000);
+    }
   }
 
-  return Math.min(MAX_BACKOFF_DELAY_MS, delayMs);
+  return getRandomInteger(
+    Math.min(MAX_BACKOFF_DELAY_MS, minDelayMs),
+    Math.min(MAX_BACKOFF_DELAY_MS, maxDelayMs)
+  );
 }
 
 export function isRetriableNetworkError(message: string) {
