@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useConnection } from "@solana/wallet-adapter-react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { VersionedTransaction } from "@solana/web3.js";
 
@@ -73,7 +74,8 @@ export function useSwap({
   slippageBps = 50,
   enabled = true,
 }: UseSwapOptions) {
-  const { publicKey, signTransaction, connected } = useWallet();
+  const { connection } = useConnection();
+  const { publicKey, sendTransaction, connected } = useWallet();
 
   const [status, setStatus] = useState<SwapStatus>("idle");
   const [quote, setQuote] = useState<QuoteResponse | null>(null);
@@ -159,7 +161,7 @@ export function useSwap({
   }, [inputMint, outputMint, amount, slippageBps]);
 
   const executeSwap = useCallback(async () => {
-    if (!quote || !publicKey || !signTransaction || !connected) {
+    if (!quote || !publicKey || !sendTransaction || !connected) {
       setError("Wallet not connected");
       setStatus("error");
       return;
@@ -192,33 +194,30 @@ export function useSwap({
       const transaction = VersionedTransaction.deserialize(
         base64ToUint8Array(swapTransaction)
       );
-      const signedTransaction = await signTransaction(transaction);
 
-      // Step 3: Send the signed transaction
+      // Step 3: Send the transaction with the connected wallet
       setStatus("sending");
-
-      const signedTransactionBase64 = btoa(
-        String.fromCharCode(...signedTransaction.serialize())
-      );
-
-      const sendRes = await fetch("/api/solana/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          signedTransaction: signedTransactionBase64,
-          blockhash: transaction.message.recentBlockhash,
-          lastValidBlockHeight,
-        }),
+      const txid = await sendTransaction(transaction, connection, {
+        skipPreflight: true,
+        maxRetries: 2,
       });
 
-      if (!sendRes.ok) {
-        const errData = await sendRes.json().catch(() => ({}));
-        throw new Error(errData.error || `Send failed: ${sendRes.status}`);
+      setTxSignature(txid);
+      setStatus("confirming");
+
+      const confirmation = await connection.confirmTransaction(
+        {
+          signature: txid,
+          blockhash: transaction.message.recentBlockhash,
+          lastValidBlockHeight,
+        },
+        "confirmed"
+      );
+
+      if (confirmation.value.err) {
+        throw new Error("Transaction failed on-chain");
       }
 
-      const { signature: txid } = await sendRes.json();
-
-      setTxSignature(txid);
       setStatus("confirmed");
     } catch (err: unknown) {
       console.error("Swap execution error:", err);
@@ -232,7 +231,7 @@ export function useSwap({
       }
       setStatus("error");
     }
-  }, [quote, publicKey, signTransaction, connected]);
+  }, [quote, publicKey, sendTransaction, connected, connection]);
 
   const reset = useCallback(() => {
     setStatus("idle");
