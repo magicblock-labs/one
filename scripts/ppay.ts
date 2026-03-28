@@ -68,6 +68,12 @@ interface BalanceCheckResult {
   diff: bigint;
 }
 
+interface AddressTarget {
+  address: string;
+  key: PublicKey;
+  label: string;
+}
+
 function printUsage() {
   console.error("Usage: ppay <amount> <from-keypair.json> <to> <ntimes>");
   console.error("Example: ppay 1 ~/.config/solana/id.json 9xyz... 20");
@@ -302,6 +308,19 @@ async function getLatestAddressSlot(connection: Connection, address: PublicKey) 
   return latest?.slot ?? 0;
 }
 
+async function getAddressSlotSnapshots(
+  connection: Connection,
+  targets: AddressTarget[]
+): Promise<AddressSlotSnapshot[]> {
+  return Promise.all(
+    targets.map(async (target) => ({
+      label: target.label,
+      address: target.address,
+      slot: await getLatestAddressSlot(connection, target.key),
+    }))
+  );
+}
+
 async function withRpcRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
   return withNetworkRetry(
     fn,
@@ -514,6 +533,49 @@ async function getBalanceCheckResult(
   };
 }
 
+async function settleBalanceCheckResult(
+  connection: Connection,
+  before: WalletUsdcBalances,
+  from: PublicKey,
+  to: PublicKey,
+  usdcMint: PublicKey,
+  label: string
+): Promise<BalanceCheckResult> {
+  let result = await getBalanceCheckResult(connection, before, from, to, usdcMint);
+
+  if (result.diff > 0n) {
+    return result;
+  }
+
+  printStatus(
+    "WAIT ",
+    `${label}: non-positive diff ${formatBaseUnits(
+      result.diff,
+      USDC_DECIMALS
+    )} USDC. Waiting up to ${((BALANCE_SETTLE_ATTEMPTS - 1) * BALANCE_SETTLE_DELAY_MS) / 1000}s for lagging confirmations`,
+    ANSI_YELLOW
+  );
+
+  for (let attempt = 2; attempt <= BALANCE_SETTLE_ATTEMPTS; attempt += 1) {
+    await sleep(BALANCE_SETTLE_DELAY_MS);
+    result = await getBalanceCheckResult(connection, before, from, to, usdcMint);
+    if (result.diff > 0n) {
+      return result;
+    }
+
+    printStatus(
+      "WAIT ",
+      `${label}: attempt ${attempt}/${BALANCE_SETTLE_ATTEMPTS} diff ${formatBaseUnits(
+        result.diff,
+        USDC_DECIMALS
+      )} USDC`,
+      ANSI_YELLOW
+    );
+  }
+
+  return result;
+}
+
 function logWalletUsdcBalances(label: string, balances: WalletUsdcBalances) {
   printSection(`${label} Balances`, ANSI_MAGENTA);
   printKeyValue(
@@ -605,6 +667,23 @@ async function main() {
   const connection = new Connection(rpcEndpoint, "confirmed");
   const fromKey = signer.publicKey;
   const vaultKey = parsePublicKey(DEVNET_VAULT, "vault");
+  const addressTargets: AddressTarget[] = [
+    {
+      label: "from",
+      address: signerAddress,
+      key: fromKey,
+    },
+    {
+      label: "to",
+      address: toAddress,
+      key: to,
+    },
+    {
+      label: "vault",
+      address: vaultKey.toBase58(),
+      key: vaultKey,
+    },
+  ];
 
   printSection("Private USDC Transfer", ANSI_CYAN);
   printKeyValue("Amount", `${bold(amountArg)} USDC x ${bold(String(ntimes))}`);
@@ -621,23 +700,7 @@ async function main() {
     )} split=${colorize(String(split), ANSI_YELLOW)}`
   );
 
-  const slotSnapshots: AddressSlotSnapshot[] = [
-    {
-      label: "from",
-      address: signerAddress,
-      slot: await getLatestAddressSlot(connection, fromKey),
-    },
-    {
-      label: "to",
-      address: toAddress,
-      slot: await getLatestAddressSlot(connection, to),
-    },
-    {
-      label: "vault",
-      address: vaultKey.toBase58(),
-      slot: await getLatestAddressSlot(connection, vaultKey),
-    },
-  ];
+  const slotSnapshots = await getAddressSlotSnapshots(connection, addressTargets);
   printSection("Slot Snapshot", ANSI_YELLOW);
   slotSnapshots.forEach((snapshot) => {
     printKeyValue(snapshot.label, colorize(String(snapshot.slot), ANSI_YELLOW));
@@ -654,6 +717,10 @@ async function main() {
     slotSnapshots,
     usdcMintKey
   );
+  let slabSlotSnapshots = slotSnapshots;
+  let slabBalancesBefore = balancesBefore;
+  let slabAddressBalancesBefore = addressBalancesBefore;
+  let slabStartTransferCount = 0;
   logWalletUsdcBalances("Before", balancesBefore);
 
   const signatures: string[] = [];
@@ -757,12 +824,13 @@ async function main() {
       );
       await sleep(CHECKPOINT_DELAY_MS);
 
-      const checkpointResult = await getBalanceCheckResult(
+      const checkpointResult = await settleBalanceCheckResult(
         connection,
-        balancesBefore,
+        slabBalancesBefore,
         fromKey,
         to,
-        usdcMintKey
+        usdcMintKey,
+        `Checkpoint ${completedTransfers}`
       );
 
       logWalletUsdcBalances(`Checkpoint ${completedTransfers}`, checkpointResult.balances);
@@ -781,6 +849,19 @@ async function main() {
 
       if (checkpointResult.diff === 0n) {
         printStatus("CHK  ", "Balance check matched. Continuing.", ANSI_GREEN);
+        slabSlotSnapshots = await getAddressSlotSnapshots(connection, addressTargets);
+        slabBalancesBefore = checkpointResult.balances;
+        slabAddressBalancesBefore = await getAddressBalanceSnapshots(
+          connection,
+          slabSlotSnapshots,
+          usdcMintKey
+        );
+        slabStartTransferCount = completedTransfers;
+        printStatus(
+          "SLAB ",
+          `Reset slab baseline after transfer ${completedTransfers}`,
+          ANSI_CYAN
+        );
       } else {
         printStatus(
           "CHK  ",
@@ -796,52 +877,34 @@ async function main() {
     }
   }
 
-  const balancesAfter = await getWalletUsdcBalances(
+  let finalBalanceResult = await getBalanceCheckResult(
     connection,
+    slabBalancesBefore,
     fromKey,
     to,
     usdcMintKey
   );
-  let finalBalancesAfter = balancesAfter;
-  let balanceDiff = getBalanceDiff(balancesBefore, finalBalancesAfter);
+  let finalBalancesAfter = finalBalanceResult.balances;
+  let balanceDiff = finalBalanceResult.diff;
 
-  if (balanceDiff < 0n) {
+  if (balanceDiff <= 0n) {
     printSection("Balance Settle", ANSI_YELLOW);
-    printStatus(
-      "WAIT ",
-      `Negative diff detected. Retrying for up to ${(
-        (BALANCE_SETTLE_ATTEMPTS - 1) *
-        BALANCE_SETTLE_DELAY_MS
-      ) / 1000}s`,
-      ANSI_YELLOW
+    finalBalanceResult = await settleBalanceCheckResult(
+      connection,
+      slabBalancesBefore,
+      fromKey,
+      to,
+      usdcMintKey,
+      "Final slab"
     );
-
-    for (let attempt = 2; attempt <= BALANCE_SETTLE_ATTEMPTS; attempt += 1) {
-      await sleep(BALANCE_SETTLE_DELAY_MS);
-      finalBalancesAfter = await getWalletUsdcBalances(
-        connection,
-        fromKey,
-        to,
-        usdcMintKey
-      );
-      balanceDiff = getBalanceDiff(balancesBefore, finalBalancesAfter);
-      if (balanceDiff >= 0n) break;
-
-      printStatus(
-        "WAIT ",
-        `Attempt ${attempt}/${BALANCE_SETTLE_ATTEMPTS}: diff ${formatBaseUnits(
-          balanceDiff,
-          USDC_DECIMALS
-        )} USDC`,
-        ANSI_YELLOW
-      );
-    }
+    finalBalancesAfter = finalBalanceResult.balances;
+    balanceDiff = finalBalanceResult.diff;
   }
 
   logWalletUsdcBalances("After", finalBalancesAfter);
   const addressBalancesAfter = await getAddressBalanceSnapshots(
     connection,
-    slotSnapshots,
+    slabSlotSnapshots,
     usdcMintKey
   );
 
@@ -876,7 +939,7 @@ async function main() {
   }
 
   const storeDir = path.join(process.cwd(), STORE_DIR);
-  const runDirectoryName = getNextRunDirectoryName(storeDir, slotSnapshots);
+  const runDirectoryName = getNextRunDirectoryName(storeDir, slabSlotSnapshots);
   const outputDir = path.join(storeDir, runDirectoryName);
   mkdirSync(outputDir, { recursive: true });
 
@@ -888,12 +951,13 @@ async function main() {
     ANSI_YELLOW
   );
   await sleep(EXPORT_SETTLE_DELAY_MS);
-  addressBalancesBefore.forEach((snapshot) => {
+  slabAddressBalancesBefore.forEach((snapshot) => {
     writeBalanceDump(outputDir, snapshot, "before");
   });
-  const commonNewTxCount = signatures.length;
+  const slabTransferCount = completedTransfers - slabStartTransferCount;
+  const commonNewTxCount = slabTransferCount;
   addressBalancesAfter.forEach((snapshot) => {
-    const beforeBalance = addressBalancesBefore.find(
+    const beforeBalance = slabAddressBalancesBefore.find(
       (item) => item.address === snapshot.address
     )!;
     const balanceChange = snapshot.usdcBalance - beforeBalance.usdcBalance;
@@ -904,6 +968,7 @@ async function main() {
 
     if (snapshot.label === "from") {
       extra.transfersCompleted = completedTransfers;
+      extra.slabTransfersCompleted = slabTransferCount;
       extra.doubleSpendDetected = doubleSpendDetected;
     }
 
@@ -917,7 +982,7 @@ async function main() {
 
     writeBalanceDump(outputDir, snapshot, "after", extra);
   });
-  for (const snapshot of slotSnapshots) {
+  for (const snapshot of slabSlotSnapshots) {
     const addressKey = new PublicKey(snapshot.address);
     const transactions = await collectNewTransactions(
       connection,
@@ -925,7 +990,7 @@ async function main() {
       snapshot.slot
     );
     writeTransactionDump(outputDir, snapshot, transactions);
-    const beforeBalance = addressBalancesBefore.find(
+    const beforeBalance = slabAddressBalancesBefore.find(
       (item) => item.address === snapshot.address
     )!;
     const afterBalance = addressBalancesAfter.find(
