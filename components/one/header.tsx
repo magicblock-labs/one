@@ -121,7 +121,7 @@ const FAQ_ITEMS = [
         <p className="mt-3">Users and integrators should consider:</p>
         <ul className="mt-3 list-disc space-y-1 pl-5">
           <li>The correctness of the underlying Solana smart contracts</li>
-          <li>The correctness of the underlying Solana smart contracts</li>
+          <li>The policies governing access and transaction authorization</li>
           <li>The security guarantees of the hardware manufacturer (Intel TDX)</li>
         </ul>
       </>
