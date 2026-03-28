@@ -865,6 +865,16 @@ async function main() {
     console.log(`  ${dim(String(index + 1).padStart(2, "0"))} ${signature}`);
   });
 
+  if (balanceDiff === 0n) {
+    printSection("Transaction Export", ANSI_CYAN);
+    printStatus(
+      "SKIP ",
+      "Combined balance is unchanged. Skipping transaction download/export.",
+      ANSI_GREEN
+    );
+    return;
+  }
+
   const storeDir = path.join(process.cwd(), STORE_DIR);
   const runDirectoryName = getNextRunDirectoryName(storeDir, slotSnapshots);
   const outputDir = path.join(storeDir, runDirectoryName);
