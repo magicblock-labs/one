@@ -2,7 +2,6 @@
 
 import { useState, useCallback, useEffect, useMemo } from "react";
 import {
-  ChevronDown,
   Loader2,
   ExternalLink,
   Check,
@@ -133,7 +132,7 @@ function formatTokenBalance(value: number) {
   });
 }
 
-const MAX_PRIVATE_DELAY_MS = 30 * 60 * 1000;
+const MAX_PRIVATE_DELAY_MS = 5 * 60 * 1000;
 
 function formatDelayValue(delayMs: number) {
   if (delayMs >= 60_000) {
@@ -647,9 +646,10 @@ export function PaymentCard() {
               <div className="text-xs text-muted-foreground mb-3">You send</div>
               <div className="flex items-center justify-between">
                 <div>
+                  {/* Temporary: restore onClick, hover styles, and ChevronDown below to re-enable token selection. */}
                   <button
-                    onClick={() => setModalOpen(true)}
-                    className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-accent/60 hover:bg-accent transition-colors cursor-pointer"
+                    disabled
+                    className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-accent/60 transition-colors cursor-default"
                   >
                     {selectedToken.logoURI ? (
                       <img
@@ -666,7 +666,7 @@ export function PaymentCard() {
                     <span className="text-foreground font-semibold text-sm">
                       {selectedToken.symbol}
                     </span>
-                    <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+                    {/* <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" /> */}
                   </button>
                   {connected && publicKey && (
                     <div className="mt-1 px-1 text-xs text-muted-foreground">
