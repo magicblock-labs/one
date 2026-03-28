@@ -17,7 +17,7 @@ const STORE_DIR = "store";
 const MAX_PRIVATE_DELAY_MS = 30 * 60 * 1000;
 const USDC_DECIMALS = 6;
 const TRANSFER_DELAY_MS = 500;
-const CHECKPOINT_INTERVAL = 10;
+const CHECKPOINT_INTERVAL = 2;
 const CHECKPOINT_DELAY_MS = 10_000;
 const BALANCE_SETTLE_ATTEMPTS = 5;
 const BALANCE_SETTLE_DELAY_MS = 500;
@@ -223,6 +223,13 @@ function shortenAddress(value: string) {
 
 function getExportBaseName(snapshot: { label: string }) {
   return snapshot.label;
+}
+
+function printSlotSnapshots(title: string, snapshots: AddressSlotSnapshot[]) {
+  printSection(title, ANSI_YELLOW);
+  snapshots.forEach((snapshot) => {
+    printKeyValue(snapshot.label, colorize(String(snapshot.slot), ANSI_YELLOW));
+  });
 }
 
 function getNextRunDirectoryName(storeDir: string, slotSnapshots: AddressSlotSnapshot[]) {
@@ -701,10 +708,7 @@ async function main() {
   );
 
   const slotSnapshots = await getAddressSlotSnapshots(connection, addressTargets);
-  printSection("Slot Snapshot", ANSI_YELLOW);
-  slotSnapshots.forEach((snapshot) => {
-    printKeyValue(snapshot.label, colorize(String(snapshot.slot), ANSI_YELLOW));
-  });
+  printSlotSnapshots("Slot Snapshot", slotSnapshots);
 
   const balancesBefore = await getWalletUsdcBalances(
     connection,
@@ -832,8 +836,6 @@ async function main() {
         usdcMintKey,
         `Checkpoint ${completedTransfers}`
       );
-
-      logWalletUsdcBalances(`Checkpoint ${completedTransfers}`, checkpointResult.balances);
       if (checkpointResult.diff > 0n) {
         console.log(
           boldRed(
@@ -848,21 +850,34 @@ async function main() {
       }
 
       if (checkpointResult.diff === 0n) {
-        printStatus("CHK  ", "Balance check matched. Continuing.", ANSI_GREEN);
-        slabSlotSnapshots = await getAddressSlotSnapshots(connection, addressTargets);
-        slabBalancesBefore = checkpointResult.balances;
-        slabAddressBalancesBefore = await getAddressBalanceSnapshots(
+        const nextSlabSlotSnapshots = await getAddressSlotSnapshots(connection, addressTargets);
+        const nextSlabAddressBalancesBefore = await getAddressBalanceSnapshots(
           connection,
-          slabSlotSnapshots,
+          nextSlabSlotSnapshots,
           usdcMintKey
         );
-        slabStartTransferCount = completedTransfers;
+
+        printSlotSnapshots("Slab Slot Snapshot", nextSlabSlotSnapshots);
+        logWalletUsdcBalances("Slab Before", slabBalancesBefore);
+        logWalletUsdcBalances("Slab After", checkpointResult.balances);
+        printSection("Slab Balance Check", ANSI_CYAN);
+        console.log(
+          `${colorize("MATCH", ANSI_GREEN)} ${bold("Combined balance is unchanged.")}`
+        );
         printStatus(
           "SLAB ",
           `Reset slab baseline after transfer ${completedTransfers}`,
           ANSI_CYAN
         );
+
+        slabSlotSnapshots = nextSlabSlotSnapshots;
+        slabBalancesBefore = checkpointResult.balances;
+        slabAddressBalancesBefore = nextSlabAddressBalancesBefore;
+        slabStartTransferCount = completedTransfers;
       } else {
+        logWalletUsdcBalances("Slab Before", slabBalancesBefore);
+        logWalletUsdcBalances("Slab After", checkpointResult.balances);
+        printSection("Slab Balance Check", ANSI_CYAN);
         printStatus(
           "CHK  ",
           `Balance mismatch ${formatBaseUnits(checkpointResult.diff, USDC_DECIMALS)} USDC. Continuing.`,
@@ -901,14 +916,11 @@ async function main() {
     balanceDiff = finalBalanceResult.diff;
   }
 
-  logWalletUsdcBalances("After", finalBalancesAfter);
-  const addressBalancesAfter = await getAddressBalanceSnapshots(
-    connection,
-    slabSlotSnapshots,
-    usdcMintKey
-  );
-
-  printSection("Balance Check", ANSI_CYAN);
+  const latestSlotSnapshots = await getAddressSlotSnapshots(connection, addressTargets);
+  printSlotSnapshots("Latest Slot Snapshot", latestSlotSnapshots);
+  logWalletUsdcBalances("Overall Before", balancesBefore);
+  logWalletUsdcBalances("Overall After", finalBalancesAfter);
+  printSection("Overall Balance Check", ANSI_CYAN);
   if (balanceDiff === 0n) {
     console.log(
       `${colorize("MATCH", ANSI_GREEN)} ${bold("Combined balance is unchanged.")}`
@@ -937,6 +949,12 @@ async function main() {
     );
     return;
   }
+
+  const addressBalancesAfter = await getAddressBalanceSnapshots(
+    connection,
+    slabSlotSnapshots,
+    usdcMintKey
+  );
 
   const storeDir = path.join(process.cwd(), STORE_DIR);
   const runDirectoryName = getNextRunDirectoryName(storeDir, slabSlotSnapshots);
