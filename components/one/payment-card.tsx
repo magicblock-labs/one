@@ -26,6 +26,7 @@ import {
 } from "@/lib/tokens";
 import { usePrices } from "@/hooks/use-sol-price";
 import { useAggregatorTokens } from "@/hooks/use-aggregator-tokens";
+import { dispatchPrivateBalanceRefresh } from "@/lib/private-balance-refresh";
 import { PAYMENTS_DEFAULT_USDC_MINT } from "@/lib/payments";
 import { Slider } from "@/components/ui/slider";
 import { TokenSelectModal } from "./token-select-modal";
@@ -602,6 +603,7 @@ export function PaymentCard() {
       }
 
       setStatus("confirmed");
+      dispatchPrivateBalanceRefresh();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Payment failed";
       if (message.includes("User rejected")) {

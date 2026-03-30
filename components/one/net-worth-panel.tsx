@@ -4,6 +4,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import bs58 from "bs58";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { PRIVATE_BALANCE_REFRESH_EVENT } from "@/lib/private-balance-refresh";
 import {
   clearStoredPrivateAuthToken,
   defaultPrivateBalanceMints,
@@ -48,10 +49,6 @@ export function NetWorthPanel() {
         await Promise.all(
           rows.map(async ({ mint, decimals }) => {
             const row = await fetchPrivateBalance(owner, mint, token);
-            console.log("row:", row, formatBaseUnits(
-              row.balance,
-              decimals,
-            ));
             next[mint] = formatBaseUnits(
               row.balance,
               decimals,
@@ -78,6 +75,16 @@ export function NetWorthPanel() {
     }
     void loadBalances(authToken);
   }, [owner, authToken, loadBalances]);
+
+  useEffect(() => {
+    if (!authToken) return;
+    const onRefresh = () => {
+      void loadBalances(authToken);
+    };
+    window.addEventListener(PRIVATE_BALANCE_REFRESH_EVENT, onRefresh);
+    return () =>
+      window.removeEventListener(PRIVATE_BALANCE_REFRESH_EVENT, onRefresh);
+  }, [authToken, loadBalances]);
 
   const needsAuthOverlay = Boolean(owner && !authToken);
 

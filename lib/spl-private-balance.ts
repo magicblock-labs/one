@@ -30,7 +30,6 @@ export async function fetchSplChallenge(pubkeyBase58: string): Promise<string> {
   const params = new URLSearchParams({
     pubkey: pubkeyBase58,
   });
-  console.log("getPaymentsApiUrl:", getPaymentsApiUrl(`/v1/spl/challenge?${params}`));
   const res = await fetch(getPaymentsApiUrl(`/v1/spl/challenge?${params}`));
   if (!res.ok) {
     const text = await res.text();
