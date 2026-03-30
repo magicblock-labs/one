@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeftRight, Send, QrCode } from "lucide-react";
+import { AlertTriangle, ArrowLeftRight, Send, QrCode } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { SwapCard } from "./swap-card";
 import { PaymentCard } from "./payment-card";
@@ -72,6 +72,8 @@ export function TradeHub({
             ? "swap"
             : "payment"
   );
+  const showPrivatePaymentsNotice =
+    activeTop === "payment" && !searchParams.has("public");
 
   useEffect(() => {
     if (urlTab === "swap" || urlTab === "payment" || urlTab === "request") {
@@ -123,6 +125,27 @@ export function TradeHub({
 
   return (
     <div className="w-full max-w-[480px] mx-auto">
+      {showPrivatePaymentsNotice && (
+        <div className="pointer-events-none fixed bottom-4 left-1/2 z-30 w-[calc(100vw-2rem)] max-w-[44rem] -translate-x-1/2 xl:max-w-[52rem]">
+          <div className="rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-4 py-3 shadow-lg shadow-black/20 backdrop-blur-md">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-400" />
+              <div className="min-w-0">
+                <div className="text-xs font-medium text-foreground">
+                  Private payments beta
+                </div>
+                <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  The private payments API is in beta and currently
+                  undergoing a security audit. It is suitable for testing and
+                  pilot integrations while full production rollout is still in
+                  progress.
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Top-level tab switcher */}
       <div className="flex items-center justify-center gap-4 mb-6">
         {topTabs.map((tab) => {

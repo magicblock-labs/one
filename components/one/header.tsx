@@ -6,6 +6,7 @@ import {
   ExternalLink,
   Code2,
   CircleHelp /*, Settings, BarChart3 */,
+  Menu,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -31,6 +32,13 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const FAQ_ITEMS = [
   {
@@ -159,7 +167,7 @@ export function Header() {
   // };
 
   return (
-    <header className="sticky top-0 z-50 flex items-center justify-between px-6 py-4 bg-background/80 backdrop-blur-md">
+    <header className="sticky top-0 z-50 flex items-center justify-between bg-background/80 px-4 py-4 backdrop-blur-md sm:px-6">
       {/* Logo */}
       <Link href="/" aria-label="MagicBlock One" className="flex items-center gap-2">
         <AnimatedLogo className="h-6 w-[7.75rem] sm:h-7 sm:w-[8.75rem]" />
@@ -173,11 +181,11 @@ export function Header() {
         </div>
       </Link>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-2 sm:gap-4">
         <button
           type="button"
           onClick={() => setFaqModalOpen(true)}
-          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+          className="hidden cursor-pointer items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground sm:flex"
         >
           <CircleHelp className="w-4 h-4" />
           <span className="hidden sm:inline">FAQ</span>
@@ -213,7 +221,7 @@ export function Header() {
           href="https://docs.magicblock.gg/pages/private-ephemeral-rollups-pers/how-to-guide/quickstart"
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+          className="hidden cursor-pointer items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground sm:flex"
         >
           <ExternalLink className="w-4 h-4" />
           <span className="hidden sm:inline">Documentation</span>
@@ -224,11 +232,56 @@ export function Header() {
           href="https://payments.magicblock.app/"
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+          className="hidden cursor-pointer items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground sm:flex"
         >
           <Code2 className="w-4 h-4" />
           <span className="hidden sm:inline">Developer API</span>
         </a>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label="Open navigation menu"
+              className="flex h-10 w-10 cursor-pointer items-center justify-center rounded-full border border-border bg-transparent text-foreground transition-colors hover:bg-accent sm:hidden"
+            >
+              <Menu className="h-4 w-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            className="w-52 border-border bg-card p-1.5 sm:hidden"
+          >
+            <DropdownMenuItem
+              onSelect={() => setFaqModalOpen(true)}
+              className="cursor-pointer gap-2.5"
+            >
+              <CircleHelp className="h-4 w-4" />
+              FAQ
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem asChild className="cursor-pointer gap-2.5">
+              <a
+                href="https://docs.magicblock.gg/pages/private-ephemeral-rollups-pers/how-to-guide/quickstart"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <ExternalLink className="h-4 w-4" />
+                Documentation
+              </a>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild className="cursor-pointer gap-2.5">
+              <a
+                href="https://payments.magicblock.app/"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <Code2 className="h-4 w-4" />
+                Developer API
+              </a>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         <Dialog open={faqModalOpen} onOpenChange={setFaqModalOpen}>
           <DialogContent className="max-h-[80vh] max-w-2xl overflow-hidden border-border bg-card p-0 gap-0">
