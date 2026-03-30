@@ -729,7 +729,6 @@ export function PaymentCard() {
     setTxSignature(null);
     setError(null);
     setAmount("");
-    setReceiver("");
     setMemo("");
   }, []);
 
