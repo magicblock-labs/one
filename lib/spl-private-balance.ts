@@ -89,11 +89,11 @@ export async function fetchPrivateBalance(
   const params = new URLSearchParams({
     address: owner,
     mint,
-    authToken,
     cluster: PAYMENTS_CLUSTER,
   });
   const res = await fetch(
     getPaymentsApiUrl(`/v1/spl/private-balance?${params}`),
+    { headers: { Authorization: `Bearer ${authToken}` } }
   );
   if (!res.ok) {
     let message = `Balance failed (${res.status})`;
