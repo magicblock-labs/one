@@ -15,7 +15,7 @@ import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import type { ReadonlyURLSearchParams } from "next/navigation";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { PublicKey, Transaction } from "@solana/web3.js";
+import { type Connection, PublicKey, Transaction } from "@solana/web3.js";
 import { getPrimaryDomain, resolve } from "@bonfida/spl-name-service";
 import {
   type AggregatorToken,
@@ -132,7 +132,36 @@ function formatTokenBalance(value: number) {
   });
 }
 
+async function fetchFormattedTokenBalance(
+  connection: Connection,
+  owner: PublicKey,
+  tokenMint: string,
+  decimals: number
+) {
+  if (tokenMint === SOL_MINT) {
+    const lamports = await connection.getBalance(owner, "confirmed");
+    return formatTokenBalance(lamports / Math.pow(10, decimals));
+  }
+
+  const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+    owner,
+    { mint: new PublicKey(tokenMint) },
+    "confirmed"
+  );
+
+  const uiAmount = tokenAccounts.value.reduce((total, account) => {
+    const tokenAmount = account.account.data.parsed.info.tokenAmount;
+    return total + Number(tokenAmount.uiAmountString ?? tokenAmount.uiAmount ?? 0);
+  }, 0);
+
+  return formatTokenBalance(uiAmount);
+}
+
 const MAX_PRIVATE_DELAY_MS = 5 * 60 * 1000;
+const TOKEN_PROGRAM_IDS = [
+  new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+  new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
+];
 
 function formatDelayValue(delayMs: number) {
   if (delayMs >= 60_000) {
@@ -194,6 +223,8 @@ export function PaymentCard() {
   const [isResolvingRecipient, setIsResolvingRecipient] = useState(false);
   const [walletTokenBalance, setWalletTokenBalance] = useState<string | null>(null);
   const [isWalletTokenBalanceLoading, setIsWalletTokenBalanceLoading] = useState(false);
+  const [recipientTokenBalance, setRecipientTokenBalance] = useState<string | null>(null);
+  const [isRecipientTokenBalanceLoading, setIsRecipientTokenBalanceLoading] = useState(false);
 
   const [status, setStatus] = useState<PaymentStatus>("idle");
   const [txSignature, setTxSignature] = useState<string | null>(null);
@@ -355,28 +386,14 @@ export function PaymentCard() {
 
     const fetchWalletTokenBalance = async () => {
       try {
-        if (tokenMint === SOL_MINT) {
-          const lamports = await connection.getBalance(publicKey, "confirmed");
-          if (cancelled) return;
-          setWalletTokenBalance(
-            formatTokenBalance(lamports / Math.pow(10, selectedToken.decimals))
-          );
-          return;
-        }
-
-        const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+        const nextBalance = await fetchFormattedTokenBalance(
+          connection,
           publicKey,
-          { mint: new PublicKey(tokenMint) },
-          "confirmed"
+          tokenMint,
+          selectedToken.decimals
         );
         if (cancelled) return;
-
-        const uiAmount = tokenAccounts.value.reduce((total, account) => {
-          const tokenAmount = account.account.data.parsed.info.tokenAmount;
-          return total + Number(tokenAmount.uiAmountString ?? tokenAmount.uiAmount ?? 0);
-        }, 0);
-
-        setWalletTokenBalance(formatTokenBalance(uiAmount));
+        setWalletTokenBalance(nextBalance);
       } catch {
         if (cancelled) return;
         setWalletTokenBalance(null);
@@ -392,6 +409,86 @@ export function PaymentCard() {
       cancelled = true;
     };
   }, [connection, connected, publicKey, tokenMint, selectedToken.decimals, status]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!resolvedReceiver || isResolvingRecipient) {
+      setRecipientTokenBalance(null);
+      setIsRecipientTokenBalanceLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setIsRecipientTokenBalanceLoading(true);
+    const recipientPublicKey = new PublicKey(resolvedReceiver);
+
+    const refreshRecipientTokenBalance = async () => {
+      try {
+        const nextBalance = await fetchFormattedTokenBalance(
+          connection,
+          recipientPublicKey,
+          tokenMint,
+          selectedToken.decimals
+        );
+        if (cancelled) return;
+        setRecipientTokenBalance(nextBalance);
+      } catch {
+        if (cancelled) return;
+        setRecipientTokenBalance(null);
+      } finally {
+        if (cancelled) return;
+        setIsRecipientTokenBalanceLoading(false);
+      }
+    };
+
+    void refreshRecipientTokenBalance();
+
+    if (tokenMint === SOL_MINT) {
+      const subscriptionId = connection.onAccountChange(
+        recipientPublicKey,
+        () => {
+          void refreshRecipientTokenBalance();
+        },
+        "confirmed"
+      );
+
+      return () => {
+        cancelled = true;
+        void connection.removeAccountChangeListener(subscriptionId);
+      };
+    }
+
+    const subscriptionIds = TOKEN_PROGRAM_IDS.map((programId) =>
+      connection.onProgramAccountChange(
+        programId,
+        () => {
+          void refreshRecipientTokenBalance();
+        },
+        {
+          commitment: "confirmed",
+          filters: [
+            { memcmp: { offset: 0, bytes: tokenMint } },
+            { memcmp: { offset: 32, bytes: resolvedReceiver } },
+          ],
+        }
+      )
+    );
+
+    return () => {
+      cancelled = true;
+      subscriptionIds.forEach((subscriptionId) => {
+        void connection.removeProgramAccountChangeListener(subscriptionId);
+      });
+    };
+  }, [
+    connection,
+    resolvedReceiver,
+    isResolvingRecipient,
+    tokenMint,
+    selectedToken.decimals,
+  ]);
 
   useEffect(() => {
     const params = new URLSearchParams(searchParams.toString());
@@ -736,6 +833,14 @@ export function PaymentCard() {
                   <span className="font-mono text-foreground">
                     {shortenAddress(resolvedReceiver)}
                   </span>
+                </div>
+              )}
+              {receiver && !isResolvingRecipient && isValidReceiver && (
+                <div className="mt-2 text-xs text-muted-foreground">
+                  Balance:{" "}
+                  {isRecipientTokenBalanceLoading
+                    ? "..."
+                    : `${recipientTokenBalance ?? "0"} ${selectedToken.symbol}`}
                 </div>
               )}
               {receiver && !isResolvingRecipient && !isValidReceiver && !isDomainReceiver && (
