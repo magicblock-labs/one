@@ -23,7 +23,13 @@ import {
   SolflareWalletAdapter,
 } from "@solana/wallet-adapter-wallets";
 import { Connection, PublicKey, Transaction, VersionedTransaction } from "@solana/web3.js";
+import {
+  createSolanaRpc,
+  createSolanaRpcSubscriptions,
+  getBase58Decoder,
+} from "@solana/kit";
 import { PrivyProvider, usePrivy } from "@privy-io/react-auth";
+import { useWallets as usePrivyWallets } from "@privy-io/react-auth/solana";
 import { SOLANA_PUBLIC_RPC_ENDPOINT } from "@/lib/solana-rpc";
 import {
   Dialog,
@@ -76,10 +82,71 @@ const ACTIVE_WALLET_STORAGE_KEY = "magicblock-pay.active-wallet-type";
 const UnifiedWalletContext = createContext<UnifiedWalletContextValue | null>(
   null
 );
+const base58Decoder = getBase58Decoder();
+
+function getPrivySolanaChain(endpoint: string) {
+  const normalizedEndpoint = endpoint.toLowerCase();
+
+  if (normalizedEndpoint.includes("devnet")) {
+    return "solana:devnet" as const;
+  }
+
+  return "solana:mainnet" as const;
+}
+
+function getSolanaWsEndpoint(endpoint: string) {
+  if (endpoint.startsWith("https://")) {
+    return endpoint.replace("https://", "wss://");
+  }
+
+  if (endpoint.startsWith("http://")) {
+    return endpoint.replace("http://", "ws://");
+  }
+
+  return endpoint;
+}
+
+function getSolanaExplorerUrl(
+  chain: "solana:mainnet" | "solana:devnet" | "solana:testnet"
+) {
+  if (chain === "solana:devnet") {
+    return "https://explorer.solana.com/?cluster=devnet";
+  }
+
+  if (chain === "solana:testnet") {
+    return "https://explorer.solana.com/?cluster=testnet";
+  }
+
+  return "https://explorer.solana.com";
+}
 
 function shortenAddress(address: string | null) {
   if (!address) return "";
   return `${address.slice(0, 4)}...${address.slice(-4)}`;
+}
+
+function serializeTransaction(
+  transaction: Transaction | VersionedTransaction
+): Uint8Array {
+  if (transaction instanceof VersionedTransaction) {
+    return transaction.serialize();
+  }
+
+  return transaction.serialize({
+    requireAllSignatures: false,
+    verifySignatures: false,
+  });
+}
+
+function deserializeTransaction<T extends Transaction | VersionedTransaction>(
+  original: T,
+  serializedTransaction: Uint8Array
+): T {
+  if (original instanceof VersionedTransaction) {
+    return VersionedTransaction.deserialize(serializedTransaction) as T;
+  }
+
+  return Transaction.from(serializedTransaction) as T;
 }
 
 function ConnectWalletDialog({
@@ -131,7 +198,13 @@ function ConnectWalletDialog({
   );
 }
 
-function UnifiedWalletContextProvider({ children }: { children: ReactNode }) {
+function UnifiedWalletContextProvider({
+  children,
+  privySolanaChain,
+}: {
+  children: ReactNode;
+  privySolanaChain: "solana:mainnet" | "solana:devnet" | "solana:testnet";
+}) {
   const {
     connected: solanaConnected,
     disconnect: disconnectSolanaWallet,
@@ -146,8 +219,8 @@ function UnifiedWalletContextProvider({ children }: { children: ReactNode }) {
     login,
     logout,
     ready: privyReady,
-    user,
   } = usePrivy();
+  const { ready: privyWalletsReady, wallets: privyWallets } = usePrivyWallets();
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
   const [preferredWalletType, setPreferredWalletType] =
     useState<UnifiedWalletType>(null);
@@ -178,36 +251,7 @@ function UnifiedWalletContextProvider({ children }: { children: ReactNode }) {
     window.localStorage.removeItem(ACTIVE_WALLET_STORAGE_KEY);
   }, []);
 
-  const privyWallet = useMemo(() => {
-    if (!user) return null;
-
-    const linkedAccounts = (
-      user as unknown as { linkedAccounts?: Array<Record<string, unknown>> }
-    ).linkedAccounts;
-
-    if (!linkedAccounts?.length) {
-      return null;
-    }
-
-    const solanaWallet =
-      linkedAccounts.find(
-        (account) =>
-          account.type === "wallet" &&
-          account.chainType === "solana" &&
-          account.walletClientType === "privy"
-      ) ??
-      linkedAccounts.find(
-        (account) => account.type === "wallet" && account.chainType === "solana"
-      );
-
-    if (!solanaWallet || typeof solanaWallet.address !== "string") {
-      return null;
-    }
-
-    return {
-      address: solanaWallet.address,
-    };
-  }, [user]);
+  const privyWallet = privyWallets[0] ?? null;
 
   const hasPrivyWallet = Boolean(privyAuthenticated && privyWallet);
   const activeWalletType = useMemo<UnifiedWalletType>(() => {
@@ -301,15 +345,17 @@ function UnifiedWalletContextProvider({ children }: { children: ReactNode }) {
       }
 
       if (activeWalletType === "privy" && privyWallet) {
-        void transaction;
-        throw new Error(
-          "Privy Solana transaction signing is disabled in the Turbopack build"
-        );
+        const { signedTransaction } = await privyWallet.signTransaction({
+          transaction: serializeTransaction(transaction),
+          chain: privySolanaChain,
+        });
+
+        return deserializeTransaction(transaction, signedTransaction);
       }
 
       throw new Error("Wallet not connected");
     },
-    [activeWalletType, privyWallet, signSolanaTransaction]
+    [activeWalletType, privySolanaChain, privyWallet, signSolanaTransaction]
   );
 
   const sendTransaction = useCallback(
@@ -327,31 +373,38 @@ function UnifiedWalletContextProvider({ children }: { children: ReactNode }) {
       }
 
       if (activeWalletType === "privy" && privyWallet) {
-        void transaction;
         void connection;
-        void options;
-        throw new Error(
-          "Privy Solana transaction sending is disabled in the Turbopack build"
-        );
+
+        const { signature } = await privyWallet.signAndSendTransaction({
+          transaction: serializeTransaction(transaction),
+          chain: privySolanaChain,
+          options,
+        });
+
+        return base58Decoder.decode(signature);
       }
 
       throw new Error("Wallet not connected");
     },
-    [activeWalletType, privyWallet, publicKey, sendSolanaTransaction]
+    [activeWalletType, privySolanaChain, privyWallet, publicKey, sendSolanaTransaction]
   );
 
   const walletLabel =
     activeWalletType === "solana"
       ? solanaWallet?.adapter.name ?? "Solana Wallet"
       : activeWalletType === "privy"
-        ? "Privy"
+        ? privyWallet?.standardWallet.name ?? "Privy"
         : null;
   const walletIcon =
-    activeWalletType === "solana" ? solanaWallet?.adapter.icon ?? null : null;
+    activeWalletType === "solana"
+      ? solanaWallet?.adapter.icon ?? null
+      : activeWalletType === "privy"
+        ? privyWallet?.standardWallet.icon ?? null
+        : null;
 
   const value = useMemo<UnifiedWalletContextValue>(
     () => ({
-      ready: privyReady,
+      ready: privyReady && privyWalletsReady,
       connected: Boolean(activeWalletType && publicKey),
       walletType: activeWalletType,
       address,
@@ -373,6 +426,8 @@ function UnifiedWalletContextProvider({ children }: { children: ReactNode }) {
       connectSolanaWallet,
       disconnect,
       privyReady,
+      privyWallet,
+      privyWalletsReady,
       publicKey,
       sendTransaction,
       signTransaction,
@@ -406,6 +461,21 @@ export function useUnifiedWallet() {
 
 export function SolanaWalletProvider({ children }: { children: ReactNode }) {
   const endpoint = useMemo(() => SOLANA_PUBLIC_RPC_ENDPOINT, []);
+  const privySolanaChain = useMemo(() => getPrivySolanaChain(endpoint), [endpoint]);
+  const privySolanaConfig = useMemo(
+    () => ({
+      rpcs: {
+        [privySolanaChain]: {
+          rpc: createSolanaRpc(endpoint),
+          rpcSubscriptions: createSolanaRpcSubscriptions(
+            getSolanaWsEndpoint(endpoint)
+          ),
+          blockExplorerUrl: getSolanaExplorerUrl(privySolanaChain),
+        },
+      },
+    }),
+    [endpoint, privySolanaChain]
+  );
   const wallets = useMemo(
     () => [new PhantomWalletAdapter(), new SolflareWalletAdapter()],
     []
@@ -424,10 +494,13 @@ export function SolanaWalletProvider({ children }: { children: ReactNode }) {
                 accentColor: '#696FFD',
                 logo: '/images/magicblock-logo.png',
               },
+              solana: privySolanaConfig,
               loginMethods: ["email"],
             }}
           >
-            <UnifiedWalletContextProvider>{children}</UnifiedWalletContextProvider>
+            <UnifiedWalletContextProvider privySolanaChain={privySolanaChain}>
+              {children}
+            </UnifiedWalletContextProvider>
           </PrivyProvider>
         </WalletModalProvider>
       </WalletProvider>
