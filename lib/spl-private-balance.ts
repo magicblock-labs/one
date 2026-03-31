@@ -1,8 +1,4 @@
-import {
-  getPaymentsApiUrl,
-  PAYMENTS_CLUSTER,
-  PAYMENTS_DEFAULT_USDC_MINT,
-} from "@/lib/payments";
+import { getPaymentsApiUrl, PAYMENTS_CLUSTER } from "@/lib/payments";
 
 const STORAGE_PREFIX = "magicblock:spl-private-auth-token";
 
@@ -107,34 +103,6 @@ export async function fetchPrivateBalance(
     throw new Error(message);
   }
   return res.json() as Promise<PrivateBalanceRow>;
-}
-
-/** Wrapped SOL mint (same address on mainnet and devnet). */
-export const WRAPPED_SOL_MINT =
-  "So11111111111111111111111111111111111111112";
-
-export type Mint = {
-  mint: string;
-  symbol: string;
-  decimals: number;
-  logo: string;
-}
-
-export function defaultPrivateBalanceMints(): Mint[] {
-  return [
-    {
-      mint: WRAPPED_SOL_MINT,
-      symbol: "SOL",
-      decimals: 9,
-      logo: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png"
-    },
-    {
-      mint: PAYMENTS_DEFAULT_USDC_MINT,
-      symbol: "USDC",
-      decimals: 6,
-      logo: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png"
-    },
-  ];
 }
 
 export function formatBaseUnits(raw: string, decimals: number): string {
