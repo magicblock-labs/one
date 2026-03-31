@@ -1,8 +1,8 @@
 "use client";
 
-import { useWallet } from "@solana/wallet-adapter-react";
 import { Gift, TrendingUp, Users, ArrowUpRight, Wallet } from "lucide-react";
 import Link from "next/link";
+import { useUnifiedWallet } from "@/app/wallet/solana-wallet-provider";
 
 // Mock personal data - in production this would come from your backend
 const MOCK_PERSONAL_DATA = {
@@ -13,7 +13,7 @@ const MOCK_PERSONAL_DATA = {
 };
 
 export function PersonalStats() {
-  const { connected } = useWallet();
+  const { connected } = useUnifiedWallet();
 
   if (!connected) {
     return (

@@ -11,9 +11,9 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, useCallback } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
 import { AnimatedLogo } from "./animated-logo";
-import { WalletButton } from "./wallet-button";
+import { WalletButton } from "../../app/wallet/wallet-button";
+import { useUnifiedWallet } from "@/app/wallet/solana-wallet-provider";
 // import {
 //   Tooltip,
 //   TooltipContent,
@@ -139,7 +139,7 @@ const FAQ_ITEMS = [
 
 export function Header() {
   const pathname = usePathname();
-  const { publicKey /*, connected */ } = useWallet();
+  const { publicKey } = useUnifiedWallet();
   const [referModalOpen, setReferModalOpen] = useState(false);
   const [faqModalOpen, setFaqModalOpen] = useState(false);
   const [copied, setCopied] = useState(false);
