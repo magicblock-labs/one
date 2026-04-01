@@ -24,6 +24,52 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+## Private USDC CLI
+
+This repo now includes a CLI for repeating the same private USDC transfer without going through the UI flow.
+
+```bash
+./ppay <amount> <from-keypair.json> <to-wallet> <repeat> 
+```
+
+Example:
+
+```bash 
+./ppay 1 Ae4mRHxCtxSbxvxSontR3DTQSkwP49e3sGxrK6BSXkam.json Me4mRHxCtxSbxvxSontR3DTQSkwP49e3sGxrK6BSXkam 20
+```
+
+If you want `ppay` available directly on your shell path, run:
+
+```bash
+npm link
+```
+
+Then you can use:
+
+```bash
+ppay 1 <from-keypair.json> <to-wallet> 20
+```
+
+The CLI always sends USDC and always builds a private transfer. The `from` argument is the path to the sender secret-key file, and the script derives the sender pubkey from that file.
+
+Accepted `from` file formats:
+
+- JSON array of secret-key bytes
+- JSON string containing a base58-encoded secret key
+- Raw base58-encoded secret key text
+
+Useful env vars:
+
+- `PAYMENTS_API_BASE_URL`
+- `PAYMENTS_CLUSTER`
+- `PAYMENTS_USDC_MINT`
+- `SOLANA_RPC_URL`
+- `PPAY_MIN_DELAY_MS`
+- `PPAY_MAX_DELAY_MS`
+- `PPAY_SPLIT`
+- `PPAY_MEMO`
+
+
 ## Learn More
 
 To learn more, take a look at the following resources:
