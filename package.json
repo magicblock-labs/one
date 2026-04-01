@@ -5,6 +5,7 @@
   "type": "module",
   "bin": {
     "ppay": "./ppay",
+    "ppaymulti": "./ppaymulti",
     "txanalyzer": "./txanalyzer"
   },
   "scripts": {
@@ -13,6 +14,7 @@
     "start": "next start",
     "lint": "eslint .",
     "ppay": "node --experimental-strip-types ./scripts/ppay.ts",
+    "ppaymulti": "node --experimental-strip-types ./scripts/ppaymulti.ts",
     "txanalyzer": "node --experimental-strip-types ./scripts/txanalyzer.ts"
   },
   "dependencies": {

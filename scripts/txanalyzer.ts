@@ -76,6 +76,15 @@ interface ActionsShuttleDump {
   }>;
 }
 
+interface ShuttlePairEntry {
+  shuttle: string;
+  shuttleEata: string;
+  shuttleWallet: string;
+  sourceSignature: string;
+  sourceSlot: number;
+  logLine: string;
+}
+
 function colorize(value: string, color: string) {
   return `${color}${value}${ANSI_RESET}`;
 }
@@ -100,11 +109,13 @@ function usage() {
   console.error("  actions-sig    Read from_shuttle_wallet.json and print sorted actions_tx_sig values");
   console.error("  fetch-actions-shuttle  Fetch parsed transactions for actions_tx_sig values");
   console.error("  actions-shuttle  Read actions_shuttle.json and print accountKeys[14]");
+  console.error("  find-bug       Query shuttle_wallet/shuttle_eata pairs and flag ones still open");
   console.error("Examples:");
   console.error("  txanalyzer fetch-shuttle store/4.451349229_451349230_451349230");
   console.error("  txanalyzer actions-sig store/4.451349229_451349230_451349230");
   console.error("  txanalyzer fetch-actions-shuttle store/4.451349229_451349230_451349230");
   console.error("  txanalyzer actions-shuttle store/4.451349229_451349230_451349230");
+  console.error("  txanalyzer find-bug store/4.451349229_451349230_451349230");
 }
 
 function logWait(reason: string, ms: number) {
@@ -187,6 +198,40 @@ function extractShuttleWallets(dump: TxDump) {
       sources,
     }))
     .sort((left, right) => left.shuttleWallet.localeCompare(right.shuttleWallet));
+}
+
+function extractShuttlePairs(dump: TxDump) {
+  const pairMap = new Map<string, ShuttlePairEntry>();
+
+  for (const tx of dump.transactions ?? []) {
+    const logMessages = tx.transaction?.meta?.logMessages ?? [];
+    for (const logLine of logMessages) {
+      if (!logLine.includes("Private shuttle ix accounts")) continue;
+
+      const match = logLine.match(
+        /shuttle=([1-9A-HJ-NP-Za-km-z]{32,44})\s+shuttle_eata=([1-9A-HJ-NP-Za-km-z]{32,44})\s+shuttle_wallet=([1-9A-HJ-NP-Za-km-z]{32,44})/
+      );
+      if (!match?.[1] || !match[2] || !match[3]) continue;
+
+      const key = `${match[2]}:${match[3]}`;
+      if (pairMap.has(key)) continue;
+
+      pairMap.set(key, {
+        shuttle: match[1],
+        shuttleEata: match[2],
+        shuttleWallet: match[3],
+        sourceSignature: tx.signature,
+        sourceSlot: tx.slot,
+        logLine,
+      });
+    }
+  }
+
+  return Array.from(pairMap.values()).sort((left, right) => {
+    const eataCompare = left.shuttleEata.localeCompare(right.shuttleEata);
+    if (eataCompare !== 0) return eataCompare;
+    return left.shuttleWallet.localeCompare(right.shuttleWallet);
+  });
 }
 
 function printShuttleWalletSummary(
@@ -339,6 +384,19 @@ async function getParsedTransactionForSignature(connection: Connection, signatur
         maxSupportedTransactionVersion: 0,
       }),
     `parsed tx ${signature}`
+  );
+}
+
+async function getAccountInfos(connection: Connection, addresses: string[]) {
+  if (addresses.length === 0) return [];
+
+  return withRpcRetry(
+    () =>
+      connection.getMultipleAccountsInfo(
+        addresses.map((address) => new PublicKey(address)),
+        "confirmed"
+      ),
+    `accounts ${addresses[0]}..${addresses[addresses.length - 1]}`
   );
 }
 
@@ -640,6 +698,69 @@ function runActionsShuttle(runDirectory: string) {
   }
 }
 
+async function runFindBug(runDirectory: string) {
+  const fromTxPath = path.join(runDirectory, "from_tx.json");
+  const fromTxDump = readTxDump(fromTxPath);
+  const shuttlePairs = extractShuttlePairs(fromTxDump);
+  const connection = new Connection(ER_RPC_ENDPOINT, "confirmed");
+  const results: Array<
+    ShuttlePairEntry & {
+      shuttleEataOpen: boolean;
+      shuttleWalletOpen: boolean;
+    }
+  > = [];
+
+  console.log(`${colorize("■", ANSI_CYAN)} ${bold("Shuttle Wallet Analyzer")}`);
+  console.log(`${colorize("MODE", ANSI_CYAN)} find-bug`);
+  console.log(`${colorize("DIR ", ANSI_CYAN)} ${runDirectory}`);
+  console.log(`${colorize("SRC ", ANSI_CYAN)} ${fromTxPath}`);
+  console.log(`${colorize("RPC ", ANSI_CYAN)} ${ER_RPC_ENDPOINT}`);
+  console.log(
+    `${colorize("INFO", ANSI_CYAN)} found ${bold(String(shuttlePairs.length))} unique shuttle_wallet/shuttle_eata pair(s)`
+  );
+
+  for (const [index, pair] of shuttlePairs.entries()) {
+    console.log(
+      `${colorize("CHECK", ANSI_CYAN)} ${index + 1}/${shuttlePairs.length} shuttle_eata=${pair.shuttleEata} shuttle_wallet=${pair.shuttleWallet}`
+    );
+    const [shuttleEataInfo, shuttleWalletInfo] = await getAccountInfos(connection, [
+      pair.shuttleEata,
+      pair.shuttleWallet,
+    ]);
+    results.push({
+      ...pair,
+      shuttleEataOpen: shuttleEataInfo != null,
+      shuttleWalletOpen: shuttleWalletInfo != null,
+    });
+  }
+
+  const openPairs = results.filter((item) => item.shuttleEataOpen || item.shuttleWalletOpen);
+
+  if (openPairs.length === 0) {
+    console.log(colorize("UNIQ all shuttle_wallet/shuttle_eata pairs are closed", ANSI_GREEN));
+    return;
+  }
+
+  console.log(
+    colorize(
+      `BUG  found ${openPairs.length} shuttle_wallet/shuttle_eata pair(s) still open`,
+      ANSI_RED
+    )
+  );
+
+  for (const [index, pair] of openPairs.entries()) {
+    const openKinds = [
+      pair.shuttleEataOpen ? "shuttle_eata" : null,
+      pair.shuttleWalletOpen ? "shuttle_wallet" : null,
+    ].filter(Boolean);
+    console.log(`${ANSI_BOLD}${ANSI_RED}${String(index + 1).padStart(2, " ")}. ${openKinds.join("+")}${ANSI_RESET}`);
+    console.log(`   shuttle       ${pair.shuttle}`);
+    console.log(`   shuttle_eata  ${pair.shuttleEata}`);
+    console.log(`   shuttle_wallet ${pair.shuttleWallet}`);
+    console.log(`   source        slot=${pair.sourceSlot} signature=${pair.sourceSignature}`);
+  }
+}
+
 async function main() {
   const [, , modeArg, runDirectoryArg] = process.argv;
   if (!modeArg || !runDirectoryArg) {
@@ -667,6 +788,11 @@ async function main() {
 
   if (modeArg === "actions-shuttle") {
     runActionsShuttle(runDirectory);
+    return;
+  }
+
+  if (modeArg === "find-bug") {
+    await runFindBug(runDirectory);
     return;
   }
 
