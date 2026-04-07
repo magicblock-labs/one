@@ -254,6 +254,8 @@ function UnifiedWalletContextProvider({
   const privyWallet = privyWallets[0] ?? null;
 
   const hasPrivyWallet = Boolean(privyAuthenticated && privyWallet);
+  const isRestoringPreferredPrivyWallet =
+    preferredWalletType === "privy" && (!privyReady || !privyWalletsReady);
   const activeWalletType = useMemo<UnifiedWalletType>(() => {
     if (preferredWalletType === "solana" && solanaConnected) {
       return "solana";
@@ -261,6 +263,10 @@ function UnifiedWalletContextProvider({
 
     if (preferredWalletType === "privy" && hasPrivyWallet) {
       return "privy";
+    }
+
+    if (isRestoringPreferredPrivyWallet) {
+      return null;
     }
 
     if (solanaConnected) {
@@ -272,7 +278,12 @@ function UnifiedWalletContextProvider({
     }
 
     return null;
-  }, [hasPrivyWallet, preferredWalletType, solanaConnected]);
+  }, [
+    hasPrivyWallet,
+    isRestoringPreferredPrivyWallet,
+    preferredWalletType,
+    solanaConnected,
+  ]);
 
   useEffect(() => {
     if (activeWalletType) {
@@ -318,20 +329,21 @@ function UnifiedWalletContextProvider({
   }, [login, persistPreferredWalletType]);
 
   const disconnect = useCallback(async () => {
-    if (activeWalletType === "solana") {
+    if (solanaConnected) {
       await disconnectSolanaWallet();
     }
 
-    if (activeWalletType === "privy") {
+    if (privyAuthenticated) {
       await logout();
     }
 
     persistPreferredWalletType(null);
   }, [
-    activeWalletType,
     disconnectSolanaWallet,
     logout,
     persistPreferredWalletType,
+    privyAuthenticated,
+    solanaConnected,
   ]);
 
   const signTransaction = useCallback(

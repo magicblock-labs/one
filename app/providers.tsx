@@ -7,10 +7,7 @@ const WalletProviders = dynamic(
   () =>
     import("@/app/wallet/solana-wallet-provider").then(
       (module) => module.SolanaWalletProvider
-    ),
-  {
-    ssr: false,
-  }
+    )
 );
 
 export function Providers({ children }: { children: ReactNode }) {
