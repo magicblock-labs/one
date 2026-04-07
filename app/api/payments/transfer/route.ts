@@ -99,7 +99,7 @@ export async function POST(request: NextRequest) {
       body: JSON.stringify({
         from,
         to,
-        cluster: PAYMENTS_CLUSTER,
+        ...(PAYMENTS_CLUSTER ? { cluster: PAYMENTS_CLUSTER } : {}),
         mint,
         amount: Number(amountBigInt),
         visibility,

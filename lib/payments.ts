@@ -1,7 +1,6 @@
 import { USDC_MINT } from "@/lib/tokens";
 
 const DEFAULT_PAYMENTS_API_BASE_URL = "https://payments.magicblock.app";
-const DEFAULT_PAYMENTS_CLUSTER = "devnet";
 
 const configuredPaymentsApiBaseUrl =
   process.env.PAYMENTS_API_BASE_URL?.trim() ??
@@ -29,7 +28,7 @@ function normalizePaymentsCluster(value: string) {
   }
 
   if (normalizedValue === "mainnet" || normalizedValue === "mainnet-beta") {
-    return "mainnet-beta";
+    return "mainnet";
   }
 
   const inferredCluster = normalizedValue.includes("devnet")
@@ -37,7 +36,7 @@ function normalizePaymentsCluster(value: string) {
     : normalizedValue.includes("testnet")
       ? "testnet"
       : normalizedValue.includes("mainnet")
-        ? "mainnet-beta"
+        ? "mainnet"
         : "";
 
   return inferredCluster || value.trim();
@@ -47,8 +46,7 @@ export const PAYMENTS_API_BASE_URL = (
   configuredPaymentsApiBaseUrl || DEFAULT_PAYMENTS_API_BASE_URL
 ).replace(/\/+$/, "");
 
-export const PAYMENTS_CLUSTER =
-  normalizePaymentsCluster(configuredPaymentsCluster) || DEFAULT_PAYMENTS_CLUSTER;
+export const PAYMENTS_CLUSTER = normalizePaymentsCluster(configuredPaymentsCluster);
 export const PAYMENTS_DEFAULT_USDC_MINT =
   configuredPaymentsTestUsdcMint || USDC_MINT;
 

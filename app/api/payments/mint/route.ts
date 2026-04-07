@@ -58,7 +58,9 @@ export async function GET(request: NextRequest) {
 
     const upstreamUrl = new URL(getPaymentsApiUrl(PAYMENTS_ENDPOINTS.isMintInitialized));
     upstreamUrl.searchParams.set("mint", mint);
-    upstreamUrl.searchParams.set("cluster", PAYMENTS_CLUSTER);
+    if (PAYMENTS_CLUSTER) {
+      upstreamUrl.searchParams.set("cluster", PAYMENTS_CLUSTER);
+    }
     if (validator) {
       upstreamUrl.searchParams.set("validator", validator);
     }
@@ -130,7 +132,7 @@ export async function POST(request: NextRequest) {
       body: JSON.stringify({
         payer,
         mint,
-        cluster: PAYMENTS_CLUSTER,
+        ...(PAYMENTS_CLUSTER ? { cluster: PAYMENTS_CLUSTER } : {}),
         ...(validator ? { validator } : {}),
       }),
       signal: getPaymentsTimeoutSignal(),
