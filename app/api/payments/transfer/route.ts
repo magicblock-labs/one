@@ -107,7 +107,7 @@ export async function POST(request: NextRequest) {
         toBalance: "base",
         initIfMissing: true,
         initAtasIfMissing: true,
-        initVaultIfMissing: true,
+        initVaultIfMissing: false,
         ...(memo ? { memo } : {}),
         ...(visibility === "private" && minDelayMs !== undefined
           ? { minDelayMs }
