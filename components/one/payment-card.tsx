@@ -38,7 +38,7 @@ type PaymentStatus =
   | "error";
 
 interface UnsignedPaymentTransaction {
-  kind: "transfer";
+  kind: string;
   version: "legacy";
   transactionBase64: string;
   sendTo: "base" | "ephemeral";
@@ -47,6 +47,10 @@ interface UnsignedPaymentTransaction {
   instructionCount: number;
   requiredSigners: string[];
   validator?: string;
+}
+
+interface MintInitializationResponse {
+  initialized: boolean;
 }
 
 const SWAP_QUERY_PARAMS = ["buy", "sell", "amt"] as const;
@@ -225,6 +229,10 @@ export function PaymentCard() {
   const [isWalletTokenBalanceLoading, setIsWalletTokenBalanceLoading] = useState(false);
   const [recipientTokenBalance, setRecipientTokenBalance] = useState<string | null>(null);
   const [isRecipientTokenBalanceLoading, setIsRecipientTokenBalanceLoading] = useState(false);
+  const [isMintInitialized, setIsMintInitialized] = useState<boolean | null>(null);
+  const [isMintInitializationLoading, setIsMintInitializationLoading] = useState(false);
+  const [isSettingUpMint, setIsSettingUpMint] = useState(false);
+  const [mintSetupError, setMintSetupError] = useState<string | null>(null);
 
   const [status, setStatus] = useState<PaymentStatus>("idle");
   const [txSignature, setTxSignature] = useState<string | null>(null);
@@ -491,6 +499,39 @@ export function PaymentCard() {
   ]);
 
   useEffect(() => {
+    const controller = new AbortController();
+
+    setIsMintInitializationLoading(true);
+    setIsMintInitialized(null);
+    setMintSetupError(null);
+
+    void fetch(`/api/payments/mint?mint=${encodeURIComponent(tokenMint)}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Mint check failed: ${response.status}`);
+        }
+
+        const data = (await response.json()) as MintInitializationResponse;
+        setIsMintInitialized(Boolean(data.initialized));
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setIsMintInitialized(null);
+      })
+      .finally(() => {
+        if (controller.signal.aborted) return;
+        setIsMintInitializationLoading(false);
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [tokenMint]);
+
+  useEffect(() => {
     const params = new URLSearchParams(searchParams.toString());
     const shouldPersistMint = tokenMint !== PAYMENTS_DEFAULT_USDC_MINT;
     const shouldPersistRoutingParams =
@@ -614,6 +655,102 @@ export function PaymentCard() {
     [resetResultState]
   );
 
+  const signAndSendUnsignedTransaction = useCallback(
+    async (
+      unsignedTransaction: UnsignedPaymentTransaction,
+      onBeforeSend?: () => void
+    ) => {
+      if (!publicKey || !signTransaction || !connected) {
+        throw new Error("Wallet not connected");
+      }
+
+      if (unsignedTransaction.version !== "legacy") {
+        throw new Error(
+          `Unsupported transaction version: ${unsignedTransaction.version}`
+        );
+      }
+
+      if (!unsignedTransaction.requiredSigners.includes(publicKey.toBase58())) {
+        throw new Error("Wallet is not listed as a required signer");
+      }
+
+      const transaction = Transaction.from(
+        base64ToUint8Array(unsignedTransaction.transactionBase64)
+      );
+      const signedTransaction = await signTransaction(transaction);
+
+      onBeforeSend?.();
+
+      const signature = await connection.sendRawTransaction(
+        signedTransaction.serialize(),
+        {
+          skipPreflight: true,
+          maxRetries: 10,
+        }
+      );
+
+      const confirmation = await connection.confirmTransaction(
+        {
+          signature,
+          blockhash: unsignedTransaction.recentBlockhash,
+          lastValidBlockHeight: unsignedTransaction.lastValidBlockHeight,
+        },
+        "confirmed"
+      );
+
+      if (confirmation.value.err) {
+        throw new Error("Transaction failed on-chain");
+      }
+
+      return signature;
+    },
+    [publicKey, signTransaction, connected, connection]
+  );
+
+  const handleSetupMint = useCallback(async () => {
+    if (!publicKey || !signTransaction || !connected) return;
+
+    setIsSettingUpMint(true);
+    setMintSetupError(null);
+
+    try {
+      const buildRes = await fetch("/api/payments/mint", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          payer: publicKey.toBase58(),
+          mint: tokenMint,
+        }),
+      });
+
+      if (!buildRes.ok) {
+        const errData = await buildRes.json().catch(() => ({}));
+        throw new Error(errData.error || `Setup failed: ${buildRes.status}`);
+      }
+
+      const unsignedTransaction =
+        (await buildRes.json()) as UnsignedPaymentTransaction;
+
+      await signAndSendUnsignedTransaction(unsignedTransaction);
+      setIsMintInitialized(true);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Mint setup failed";
+      setMintSetupError(
+        message.includes("User rejected")
+          ? "Transaction rejected by user"
+          : message
+      );
+    } finally {
+      setIsSettingUpMint(false);
+    }
+  }, [
+    publicKey,
+    signTransaction,
+    connected,
+    tokenMint,
+    signAndSendUnsignedTransaction,
+  ]);
+
   const handleSend = useCallback(async () => {
     if (!publicKey || !signTransaction || !connected) return;
     if (!resolvedReceiver || isResolvingRecipient) return;
@@ -655,48 +792,12 @@ export function PaymentCard() {
 
       const unsignedTransaction = jsonResponse as UnsignedPaymentTransaction;
 
-      if (unsignedTransaction.version !== "legacy") {
-        throw new Error(
-          `Unsupported transaction version: ${unsignedTransaction.version}`
-        );
-      }
-
-
-      if (
-        !unsignedTransaction.requiredSigners.includes(publicKey.toBase58())
-      ) {
-        throw new Error("Wallet is not listed as a required signer");
-      }
-
       setStatus("signing");
-      const transaction = Transaction.from(
-        base64ToUint8Array(unsignedTransaction.transactionBase64)
-      );
-      const signedTransaction = await signTransaction(transaction);
-
-      setStatus("sending");
-      const signature = await connection.sendRawTransaction(
-        signedTransaction.serialize(),
-        {
-          skipPreflight: true,
-          maxRetries: 10,
-        }
+      const signature = await signAndSendUnsignedTransaction(
+        unsignedTransaction,
+        () => setStatus("sending")
       );
       setTxSignature(signature);
-
-      const confirmation = await connection.confirmTransaction(
-        {
-          signature,
-          blockhash: unsignedTransaction.recentBlockhash,
-          lastValidBlockHeight: unsignedTransaction.lastValidBlockHeight,
-        },
-        "confirmed"
-      );
-
-      if (confirmation.value.err) {
-        throw new Error("Transaction failed on-chain");
-      }
-
       setStatus("confirmed");
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Payment failed";
@@ -722,6 +823,7 @@ export function PaymentCard() {
     split,
     connection,
     isResolvingRecipient,
+    signAndSendUnsignedTransaction,
   ]);
 
   const handleReset = useCallback(() => {
@@ -1005,7 +1107,7 @@ export function PaymentCard() {
               <span className="text-xs text-destructive">{error}</span>
               {txSignature && (
                 <a
-                  href={`https://solscan.io/tx/${txSignature}`}
+                  href={`https://explorer.solana.com/tx/${txSignature}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="shrink-0 flex items-center gap-1 text-xs text-destructive hover:underline"
@@ -1017,6 +1119,41 @@ export function PaymentCard() {
             </div>
           )}
 
+          {isMintInitialized === false && (
+            <div className="mx-3 mt-2 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3">
+              <div className="min-w-0">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-foreground">
+                        Private payments are not enabled for this mint yet.
+                      </div>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        Pay the fees (~0.2 SOL) and set it up permissionlessly.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={
+                        connected ? handleSetupMint : () => openWalletModal(true)
+                      }
+                      disabled={isSettingUpMint}
+                      className="mt-0.5 inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isSettingUpMint && <Loader2 className="h-4 w-4 animate-spin" />}
+                      {connected ? "Set Up" : "Connect Wallet to Set Up"}
+                    </button>
+                  </div>
+                  {mintSetupError && (
+                    <div className="mt-2 text-xs text-destructive">
+                      {mintSetupError}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Success */}
           {status === "confirmed" && txSignature && (
             <div className="mx-3 mt-2 flex items-center justify-between px-3 py-2 rounded-lg bg-success/10 border border-success/20">
@@ -1025,7 +1162,7 @@ export function PaymentCard() {
                 <span className="text-xs text-success">Payment sent!</span>
               </div>
               <a
-                href={`https://solscan.io/tx/${txSignature}`}
+                href={`https://explorer.solana.com/tx/${txSignature}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-1 text-xs text-success hover:underline"
@@ -1048,7 +1185,13 @@ export function PaymentCard() {
               receiver={receiver}
               tokenSymbol={selectedToken.symbol}
               isPrivate={isPrivate}
+<<<<<<< feat/privy
               onConnect={openConnectModal}
+=======
+              isMintInitializationLoading={isMintInitializationLoading}
+              requiresMintSetup={isPrivate && isMintInitialized === false}
+              onConnect={() => openWalletModal(true)}
+>>>>>>> main
               onSend={handleSend}
               onRetry={() => {
                 setStatus("idle");
@@ -1081,6 +1224,8 @@ function PaymentActionButton({
   receiver,
   tokenSymbol,
   isPrivate,
+  isMintInitializationLoading,
+  requiresMintSetup,
   onConnect,
   onSend,
   onRetry,
@@ -1095,6 +1240,8 @@ function PaymentActionButton({
   receiver: string;
   tokenSymbol: string;
   isPrivate: boolean;
+  isMintInitializationLoading: boolean;
+  requiresMintSetup: boolean;
   onConnect: () => void;
   onSend: () => void;
   onRetry: () => void;
@@ -1162,6 +1309,28 @@ function PaymentActionButton({
         className="w-full py-4 rounded-xl bg-secondary text-muted-foreground font-semibold text-base cursor-not-allowed"
       >
         Invalid recipient address
+      </button>
+    );
+  }
+
+  if (isPrivate && isMintInitializationLoading) {
+    return (
+      <button
+        disabled
+        className="w-full py-4 rounded-xl bg-secondary text-muted-foreground font-semibold text-base cursor-not-allowed"
+      >
+        Checking mint setup...
+      </button>
+    );
+  }
+
+  if (requiresMintSetup) {
+    return (
+      <button
+        disabled
+        className="w-full py-4 rounded-xl bg-secondary text-muted-foreground font-semibold text-base cursor-not-allowed"
+      >
+        Set up this mint to continue
       </button>
     );
   }

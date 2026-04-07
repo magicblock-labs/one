@@ -493,7 +493,7 @@ export function SwapCard({
                 <span className="text-xs text-success">Swap successful!</span>
               </div>
               <a
-                href={`https://solscan.io/tx/${txSignature}`}
+                href={`https://explorer.solana.com/tx/${txSignature}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-1 text-xs text-success hover:underline"

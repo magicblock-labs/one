@@ -25,6 +25,8 @@ export const PAYMENTS_DEFAULT_USDC_MINT =
   configuredPaymentsTestUsdcMint || USDC_MINT;
 
 export const PAYMENTS_ENDPOINTS = {
+  initializeMint: "/v1/spl/initialize-mint",
+  isMintInitialized: "/v1/spl/is-mint-initialized",
   splTransfer: "/v1/spl/transfer",
 } as const;
 
