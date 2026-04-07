@@ -1107,7 +1107,7 @@ export function PaymentCard() {
               <span className="text-xs text-destructive">{error}</span>
               {txSignature && (
                 <a
-                  href={`https://explorer.solana.com/tx/${txSignature}`}
+                  href={`/api/explorer/tx?signature=${encodeURIComponent(txSignature)}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="shrink-0 flex items-center gap-1 text-xs text-destructive hover:underline"
@@ -1160,7 +1160,7 @@ export function PaymentCard() {
                 <span className="text-xs text-success">Payment sent!</span>
               </div>
               <a
-                href={`https://explorer.solana.com/tx/${txSignature}`}
+                href={`/api/explorer/tx?signature=${encodeURIComponent(txSignature)}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-1 text-xs text-success hover:underline"
