@@ -1134,9 +1134,7 @@ export function PaymentCard() {
                     </div>
                     <button
                       type="button"
-                      onClick={
-                        connected ? handleSetupMint : () => openWalletModal(true)
-                      }
+                      onClick={connected ? handleSetupMint : openConnectModal}
                       disabled={isSettingUpMint}
                       className="mt-0.5 inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
                     >
@@ -1185,13 +1183,9 @@ export function PaymentCard() {
               receiver={receiver}
               tokenSymbol={selectedToken.symbol}
               isPrivate={isPrivate}
-<<<<<<< feat/privy
               onConnect={openConnectModal}
-=======
               isMintInitializationLoading={isMintInitializationLoading}
               requiresMintSetup={isPrivate && isMintInitialized === false}
-              onConnect={() => openWalletModal(true)}
->>>>>>> main
               onSend={handleSend}
               onRetry={() => {
                 setStatus("idle");
