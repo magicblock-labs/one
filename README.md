@@ -24,6 +24,28 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+## Environment
+
+Private payments use the following environment variables:
+
+- `PAYMENTS_API_BASE_URL`: base URL for the payments API.
+- `CLUSTER`: cluster name passed to the payments API and used for Solana Explorer links. Supported values are `devnet`, `testnet`, and `mainnet-beta`.
+- `PAYMENTS_CLUSTER`: legacy fallback for the payments API cluster. `CLUSTER` takes precedence if both are set. If this value is an RPC URL containing `devnet`, `testnet`, or `mainnet`, the app infers the corresponding cluster name.
+- `NEXT_PUBLIC_PAYMENTS_TEST_USDC_MINT`: overrides the default payment mint in the UI.
+
+Example:
+
+```bash
+PAYMENTS_API_BASE_URL=http://localhost:8787 \
+CLUSTER=devnet \
+SOLANA_RPC_URL=https://rpc.magicblock.app/devnet \
+NEXT_PUBLIC_SOLANA_RPC_URL=https://rpc.magicblock.app/devnet \
+NEXT_PUBLIC_PAYMENTS_TEST_USDC_MINT=4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU \
+yarn dev -p 3002
+```
+
+With `CLUSTER=devnet`, the app sends `cluster=devnet` to the payments API and opens transactions on `https://explorer.solana.com` with the `devnet` cluster selected.
+
 ## Learn More
 
 To learn more, take a look at the following resources:
