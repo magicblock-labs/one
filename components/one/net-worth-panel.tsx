@@ -1,11 +1,9 @@
 "use client";
 
-import { useWallet } from "@solana/wallet-adapter-react";
-import { useWalletModal } from "@solana/wallet-adapter-react-ui";
+import { useUnifiedWallet } from "@/app/wallet/solana-wallet-provider";
 
 export function NetWorthPanel() {
-  const { connected } = useWallet();
-  const { setVisible } = useWalletModal();
+  const { connected, openConnectModal } = useUnifiedWallet();
 
   return (
     <div className="hidden xl:block fixed top-20 right-4 w-[220px] rounded-2xl bg-[var(--surface-container)] border border-border/40 p-4 shadow-lg shadow-black/20">
@@ -39,7 +37,7 @@ export function NetWorthPanel() {
 
       {!connected && (
         <button
-          onClick={() => setVisible(true)}
+          onClick={openConnectModal}
           className="w-full mt-4 py-2 rounded-xl border border-border/50 text-foreground text-sm font-medium hover:bg-secondary transition-colors cursor-pointer"
         >
           Connect

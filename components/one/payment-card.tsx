@@ -11,8 +11,7 @@ import {
   Copy,
   AlertTriangle,
 } from "lucide-react";
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { useWalletModal } from "@solana/wallet-adapter-react-ui";
+import { useConnection } from "@solana/wallet-adapter-react";
 import type { ReadonlyURLSearchParams } from "next/navigation";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { type Connection, PublicKey, Transaction } from "@solana/web3.js";
@@ -28,6 +27,7 @@ import { useAggregatorTokens } from "@/hooks/use-aggregator-tokens";
 import { PAYMENTS_DEFAULT_USDC_MINT } from "@/lib/payments";
 import { Slider } from "@/components/ui/slider";
 import { TokenSelectModal } from "./token-select-modal";
+import { useUnifiedWallet } from "@/app/wallet/solana-wallet-provider";
 
 type PaymentStatus =
   | "idle"
@@ -208,8 +208,8 @@ export function PaymentCard() {
     ? clampSplit(parseIntegerParam(searchParams.get("split"), 1, 1, 10))
     : 1;
   const { connection } = useConnection();
-  const { connected, publicKey, signTransaction } = useWallet();
-  const { setVisible: openWalletModal } = useWalletModal();
+  const { connected, openConnectModal, publicKey, signTransaction } =
+    useUnifiedWallet();
 
   const [tokenMint, setTokenMint] = useState(() =>
     getInitialPaymentMint(searchParams)
@@ -1134,9 +1134,7 @@ export function PaymentCard() {
                     </div>
                     <button
                       type="button"
-                      onClick={
-                        connected ? handleSetupMint : () => openWalletModal(true)
-                      }
+                      onClick={connected ? handleSetupMint : openConnectModal}
                       disabled={isSettingUpMint}
                       className="mt-0.5 inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
                     >
@@ -1185,9 +1183,9 @@ export function PaymentCard() {
               receiver={receiver}
               tokenSymbol={selectedToken.symbol}
               isPrivate={isPrivate}
+              onConnect={openConnectModal}
               isMintInitializationLoading={isMintInitializationLoading}
               requiresMintSetup={isPrivate && isMintInitialized === false}
-              onConnect={() => openWalletModal(true)}
               onSend={handleSend}
               onRetry={() => {
                 setStatus("idle");

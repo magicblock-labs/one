@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from 'next'
 import { Inter, Geist_Mono } from 'next/font/google'
 import Script from 'next/script'
 import { Analytics } from '@vercel/analytics/next'
-import { SolanaWalletProvider } from '@/components/one/solana-wallet-provider'
+import { Providers } from '@/app/providers'
 import './globals.css'
 
 const _inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
@@ -48,9 +48,9 @@ export default function RootLayout({
             gtag('config', '${GOOGLE_ANALYTICS_ID}');
           `}
         </Script>
-        <SolanaWalletProvider>
+        <Providers>
           {children}
-        </SolanaWalletProvider>
+        </Providers>
         <Analytics />
       </body>
     </html>

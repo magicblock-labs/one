@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
-import { useWallet } from "@solana/wallet-adapter-react";
 import { VersionedTransaction } from "@solana/web3.js";
+import { useUnifiedWallet } from "@/app/wallet/solana-wallet-provider";
 
 export type SwapStatus =
   | "idle"
@@ -75,7 +75,7 @@ export function useSwap({
   enabled = true,
 }: UseSwapOptions) {
   const { connection } = useConnection();
-  const { publicKey, sendTransaction, connected } = useWallet();
+  const { connected, publicKey, sendTransaction } = useUnifiedWallet();
 
   const [status, setStatus] = useState<SwapStatus>("idle");
   const [quote, setQuote] = useState<QuoteResponse | null>(null);

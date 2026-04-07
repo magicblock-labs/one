@@ -12,8 +12,6 @@ import {
   Tag,
 } from "lucide-react";
 import { QRCodeCanvas } from "qrcode.react";
-import { useWallet } from "@solana/wallet-adapter-react";
-import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   type AggregatorToken,
@@ -30,6 +28,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useUnifiedWallet } from "@/app/wallet/solana-wallet-provider";
 
 interface PaymentRequest {
   id: string;
@@ -48,8 +47,7 @@ export function RequestCard() {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { connected, publicKey } = useWallet();
-  const { setVisible: openWalletModal } = useWalletModal();
+  const { connected, openConnectModal, publicKey } = useUnifiedWallet();
 
   const [name, setName] = useState(() => searchParams.get("prd") ?? "");
   const [description, setDescription] = useState("");
@@ -372,7 +370,7 @@ export function RequestCard() {
           <div className="p-3 pt-3">
             {!connected ? (
               <button
-                onClick={() => openWalletModal(true)}
+                onClick={openConnectModal}
                 className="w-full py-4 rounded-xl bg-primary text-primary-foreground font-semibold text-base hover:brightness-110 active:scale-[0.99] transition-all cursor-pointer"
               >
                 Connect Wallet
