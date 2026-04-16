@@ -14,7 +14,12 @@ import {
 import { useConnection } from "@solana/wallet-adapter-react";
 import type { ReadonlyURLSearchParams } from "next/navigation";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { type Connection, PublicKey, Transaction } from "@solana/web3.js";
+import {
+  type Connection,
+  PublicKey,
+  Transaction,
+  VersionedTransaction,
+} from "@solana/web3.js";
 import { getPrimaryDomain, resolve } from "@bonfida/spl-name-service";
 import {
   type AggregatorToken,
@@ -39,7 +44,7 @@ type PaymentStatus =
 
 interface UnsignedPaymentTransaction {
   kind: string;
-  version: "legacy";
+  version?: "legacy" | "v0" | 0 | "0";
   transactionBase64: string;
   sendTo: "base" | "ephemeral";
   recentBlockhash: string;
@@ -65,6 +70,41 @@ function base64ToUint8Array(base64: string) {
   }
 
   return bytes;
+}
+
+function deserializeUnsignedPaymentTransaction(
+  unsignedTransaction: UnsignedPaymentTransaction
+) {
+  const transactionBytes = base64ToUint8Array(
+    unsignedTransaction.transactionBase64
+  );
+
+  if (
+    unsignedTransaction.version === undefined ||
+    unsignedTransaction.version === null
+  ) {
+    try {
+      return Transaction.from(transactionBytes);
+    } catch {
+      return VersionedTransaction.deserialize(transactionBytes);
+    }
+  }
+
+  if (unsignedTransaction.version === "legacy") {
+    return Transaction.from(transactionBytes);
+  }
+
+  if (
+    unsignedTransaction.version === "v0" ||
+    unsignedTransaction.version === 0 ||
+    unsignedTransaction.version === "0"
+  ) {
+    return VersionedTransaction.deserialize(transactionBytes);
+  }
+
+  throw new Error(
+    `Unsupported transaction version: ${unsignedTransaction.version}`
+  );
 }
 
 function decimalAmountToBaseUnits(value: string, decimals: number) {
@@ -664,19 +704,11 @@ export function PaymentCard() {
         throw new Error("Wallet not connected");
       }
 
-      if (unsignedTransaction.version !== "legacy") {
-        throw new Error(
-          `Unsupported transaction version: ${unsignedTransaction.version}`
-        );
-      }
-
       if (!unsignedTransaction.requiredSigners.includes(publicKey.toBase58())) {
         throw new Error("Wallet is not listed as a required signer");
       }
 
-      const transaction = Transaction.from(
-        base64ToUint8Array(unsignedTransaction.transactionBase64)
-      );
+      const transaction = deserializeUnsignedPaymentTransaction(unsignedTransaction);
       const signedTransaction = await signTransaction(transaction);
 
       onBeforeSend?.();
