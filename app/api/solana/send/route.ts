@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerSolanaConnection } from "@/lib/solana-rpc";
+import { createSwapServerSolanaConnection } from "@/lib/solana-rpc";
 
 function base64ToUint8Array(base64: string) {
   const buffer = Buffer.from(base64, "base64");
@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const connection = createServerSolanaConnection();
+    const connection = createSwapServerSolanaConnection();
     const rawTransaction = base64ToUint8Array(signedTransaction);
 
     const signature = await connection.sendRawTransaction(rawTransaction, {

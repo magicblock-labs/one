@@ -11,8 +11,6 @@ import {
   Settings2,
   Check,
 } from "lucide-react";
-import { useWallet } from "@solana/wallet-adapter-react";
-import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { PublicKey } from "@solana/web3.js";
 import {
@@ -26,6 +24,7 @@ import { usePrices } from "@/hooks/use-sol-price";
 import { useAggregatorTokens } from "@/hooks/use-aggregator-tokens";
 import { useSwap, type SwapStatus } from "@/hooks/use-swap";
 import { TokenSelectModal } from "./token-select-modal";
+import { useUnifiedWallet } from "@/app/wallet/solana-wallet-provider";
 
 const tabs = [
   "Market",
@@ -53,8 +52,7 @@ export function SwapCard({
   initialSellMint,
   initialAmount,
 }: SwapCardProps) {
-  const { connected, publicKey } = useWallet();
-  const { setVisible: openWalletModal } = useWalletModal();
+  const { connected, openConnectModal } = useUnifiedWallet();
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -495,7 +493,7 @@ export function SwapCard({
                 <span className="text-xs text-success">Swap successful!</span>
               </div>
               <a
-                href={`https://solscan.io/tx/${txSignature}`}
+                href={`/api/explorer/tx?signature=${encodeURIComponent(txSignature)}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-1 text-xs text-success hover:underline"
@@ -515,7 +513,7 @@ export function SwapCard({
               sellSymbol={sellToken.symbol}
               buySymbol={buyToken.symbol}
               priceImpact={priceImpact}
-              onConnect={() => openWalletModal(true)}
+              onConnect={openConnectModal}
               onSwap={executeSwap}
               onRetry={() => {
                 resetSwap();

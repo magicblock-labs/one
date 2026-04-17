@@ -2,7 +2,6 @@
 
 import { useState, useCallback, useEffect, useMemo } from "react";
 import {
-  ChevronDown,
   Loader2,
   ExternalLink,
   Check,
@@ -12,11 +11,15 @@ import {
   Copy,
   AlertTriangle,
 } from "lucide-react";
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { useWalletModal } from "@solana/wallet-adapter-react-ui";
+import { useConnection } from "@solana/wallet-adapter-react";
 import type { ReadonlyURLSearchParams } from "next/navigation";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { PublicKey, Transaction } from "@solana/web3.js";
+import {
+  type Connection,
+  PublicKey,
+  Transaction,
+  VersionedTransaction,
+} from "@solana/web3.js";
 import { getPrimaryDomain, resolve } from "@bonfida/spl-name-service";
 import {
   type AggregatorToken,
@@ -30,6 +33,7 @@ import { dispatchPrivateBalanceRefresh } from "@/lib/private-balance-refresh";
 import { PAYMENTS_DEFAULT_USDC_MINT } from "@/lib/payments";
 import { Slider } from "@/components/ui/slider";
 import { TokenSelectModal } from "./token-select-modal";
+import { useUnifiedWallet } from "@/app/wallet/solana-wallet-provider";
 
 type PaymentStatus =
   | "idle"
@@ -40,8 +44,8 @@ type PaymentStatus =
   | "error";
 
 interface UnsignedPaymentTransaction {
-  kind: "transfer";
-  version: "legacy";
+  kind: string;
+  version?: "legacy" | "v0" | 0 | "0";
   transactionBase64: string;
   sendTo: "base" | "ephemeral";
   recentBlockhash: string;
@@ -49,6 +53,10 @@ interface UnsignedPaymentTransaction {
   instructionCount: number;
   requiredSigners: string[];
   validator?: string;
+}
+
+interface MintInitializationResponse {
+  initialized: boolean;
 }
 
 const SWAP_QUERY_PARAMS = ["buy", "sell", "amt"] as const;
@@ -63,6 +71,41 @@ function base64ToUint8Array(base64: string) {
   }
 
   return bytes;
+}
+
+function deserializeUnsignedPaymentTransaction(
+  unsignedTransaction: UnsignedPaymentTransaction
+) {
+  const transactionBytes = base64ToUint8Array(
+    unsignedTransaction.transactionBase64
+  );
+
+  if (
+    unsignedTransaction.version === undefined ||
+    unsignedTransaction.version === null
+  ) {
+    try {
+      return Transaction.from(transactionBytes);
+    } catch {
+      return VersionedTransaction.deserialize(transactionBytes);
+    }
+  }
+
+  if (unsignedTransaction.version === "legacy") {
+    return Transaction.from(transactionBytes);
+  }
+
+  if (
+    unsignedTransaction.version === "v0" ||
+    unsignedTransaction.version === 0 ||
+    unsignedTransaction.version === "0"
+  ) {
+    return VersionedTransaction.deserialize(transactionBytes);
+  }
+
+  throw new Error(
+    `Unsupported transaction version: ${unsignedTransaction.version}`
+  );
 }
 
 function decimalAmountToBaseUnits(value: string, decimals: number) {
@@ -134,7 +177,36 @@ function formatTokenBalance(value: number) {
   });
 }
 
-const MAX_PRIVATE_DELAY_MS = 30 * 60 * 1000;
+async function fetchFormattedTokenBalance(
+  connection: Connection,
+  owner: PublicKey,
+  tokenMint: string,
+  decimals: number
+) {
+  if (tokenMint === SOL_MINT) {
+    const lamports = await connection.getBalance(owner, "confirmed");
+    return formatTokenBalance(lamports / Math.pow(10, decimals));
+  }
+
+  const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+    owner,
+    { mint: new PublicKey(tokenMint) },
+    "confirmed"
+  );
+
+  const uiAmount = tokenAccounts.value.reduce((total, account) => {
+    const tokenAmount = account.account.data.parsed.info.tokenAmount;
+    return total + Number(tokenAmount.uiAmountString ?? tokenAmount.uiAmount ?? 0);
+  }, 0);
+
+  return formatTokenBalance(uiAmount);
+}
+
+const MAX_PRIVATE_DELAY_MS = 5 * 60 * 1000;
+const TOKEN_PROGRAM_IDS = [
+  new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+  new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
+];
 
 function formatDelayValue(delayMs: number) {
   if (delayMs >= 60_000) {
@@ -177,8 +249,8 @@ export function PaymentCard() {
     ? clampSplit(parseIntegerParam(searchParams.get("split"), 1, 1, 10))
     : 1;
   const { connection } = useConnection();
-  const { connected, publicKey, signTransaction } = useWallet();
-  const { setVisible: openWalletModal } = useWalletModal();
+  const { connected, openConnectModal, publicKey, signTransaction } =
+    useUnifiedWallet();
 
   const [tokenMint, setTokenMint] = useState(() =>
     getInitialPaymentMint(searchParams)
@@ -196,6 +268,12 @@ export function PaymentCard() {
   const [isResolvingRecipient, setIsResolvingRecipient] = useState(false);
   const [walletTokenBalance, setWalletTokenBalance] = useState<string | null>(null);
   const [isWalletTokenBalanceLoading, setIsWalletTokenBalanceLoading] = useState(false);
+  const [recipientTokenBalance, setRecipientTokenBalance] = useState<string | null>(null);
+  const [isRecipientTokenBalanceLoading, setIsRecipientTokenBalanceLoading] = useState(false);
+  const [isMintInitialized, setIsMintInitialized] = useState<boolean | null>(null);
+  const [isMintInitializationLoading, setIsMintInitializationLoading] = useState(false);
+  const [isSettingUpMint, setIsSettingUpMint] = useState(false);
+  const [mintSetupError, setMintSetupError] = useState<string | null>(null);
 
   const [status, setStatus] = useState<PaymentStatus>("idle");
   const [txSignature, setTxSignature] = useState<string | null>(null);
@@ -357,28 +435,14 @@ export function PaymentCard() {
 
     const fetchWalletTokenBalance = async () => {
       try {
-        if (tokenMint === SOL_MINT) {
-          const lamports = await connection.getBalance(publicKey, "confirmed");
-          if (cancelled) return;
-          setWalletTokenBalance(
-            formatTokenBalance(lamports / Math.pow(10, selectedToken.decimals))
-          );
-          return;
-        }
-
-        const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+        const nextBalance = await fetchFormattedTokenBalance(
+          connection,
           publicKey,
-          { mint: new PublicKey(tokenMint) },
-          "confirmed"
+          tokenMint,
+          selectedToken.decimals
         );
         if (cancelled) return;
-
-        const uiAmount = tokenAccounts.value.reduce((total, account) => {
-          const tokenAmount = account.account.data.parsed.info.tokenAmount;
-          return total + Number(tokenAmount.uiAmountString ?? tokenAmount.uiAmount ?? 0);
-        }, 0);
-
-        setWalletTokenBalance(formatTokenBalance(uiAmount));
+        setWalletTokenBalance(nextBalance);
       } catch {
         if (cancelled) return;
         setWalletTokenBalance(null);
@@ -394,6 +458,119 @@ export function PaymentCard() {
       cancelled = true;
     };
   }, [connection, connected, publicKey, tokenMint, selectedToken.decimals, status]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!resolvedReceiver || isResolvingRecipient) {
+      setRecipientTokenBalance(null);
+      setIsRecipientTokenBalanceLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setIsRecipientTokenBalanceLoading(true);
+    const recipientPublicKey = new PublicKey(resolvedReceiver);
+
+    const refreshRecipientTokenBalance = async () => {
+      try {
+        const nextBalance = await fetchFormattedTokenBalance(
+          connection,
+          recipientPublicKey,
+          tokenMint,
+          selectedToken.decimals
+        );
+        if (cancelled) return;
+        setRecipientTokenBalance(nextBalance);
+      } catch {
+        if (cancelled) return;
+        setRecipientTokenBalance(null);
+      } finally {
+        if (cancelled) return;
+        setIsRecipientTokenBalanceLoading(false);
+      }
+    };
+
+    void refreshRecipientTokenBalance();
+
+    if (tokenMint === SOL_MINT) {
+      const subscriptionId = connection.onAccountChange(
+        recipientPublicKey,
+        () => {
+          void refreshRecipientTokenBalance();
+        },
+        "confirmed"
+      );
+
+      return () => {
+        cancelled = true;
+        void connection.removeAccountChangeListener(subscriptionId);
+      };
+    }
+
+    const subscriptionIds = TOKEN_PROGRAM_IDS.map((programId) =>
+      connection.onProgramAccountChange(
+        programId,
+        () => {
+          void refreshRecipientTokenBalance();
+        },
+        {
+          commitment: "confirmed",
+          filters: [
+            { memcmp: { offset: 0, bytes: tokenMint } },
+            { memcmp: { offset: 32, bytes: resolvedReceiver } },
+          ],
+        }
+      )
+    );
+
+    return () => {
+      cancelled = true;
+      subscriptionIds.forEach((subscriptionId) => {
+        void connection.removeProgramAccountChangeListener(subscriptionId);
+      });
+    };
+  }, [
+    connection,
+    resolvedReceiver,
+    isResolvingRecipient,
+    tokenMint,
+    selectedToken.decimals,
+  ]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    setIsMintInitializationLoading(true);
+    setIsMintInitialized(null);
+    setMintSetupError(null);
+
+    void fetch(`/api/payments/mint?mint=${encodeURIComponent(tokenMint)}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Mint check failed: ${response.status}`);
+        }
+
+        const data = (await response.json()) as MintInitializationResponse;
+        setIsMintInitialized(Boolean(data.initialized));
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setIsMintInitialized(null);
+      })
+      .finally(() => {
+        if (controller.signal.aborted) return;
+        setIsMintInitializationLoading(false);
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [tokenMint]);
 
   useEffect(() => {
     const params = new URLSearchParams(searchParams.toString());
@@ -519,6 +696,94 @@ export function PaymentCard() {
     [resetResultState]
   );
 
+  const signAndSendUnsignedTransaction = useCallback(
+    async (
+      unsignedTransaction: UnsignedPaymentTransaction,
+      onBeforeSend?: () => void
+    ) => {
+      if (!publicKey || !signTransaction || !connected) {
+        throw new Error("Wallet not connected");
+      }
+
+      if (!unsignedTransaction.requiredSigners.includes(publicKey.toBase58())) {
+        throw new Error("Wallet is not listed as a required signer");
+      }
+
+      const transaction = deserializeUnsignedPaymentTransaction(unsignedTransaction);
+      const signedTransaction = await signTransaction(transaction);
+
+      onBeforeSend?.();
+
+      const signature = await connection.sendRawTransaction(
+        signedTransaction.serialize(),
+        {
+          skipPreflight: true,
+          maxRetries: 10,
+        }
+      );
+
+      const confirmation = await connection.confirmTransaction(
+        {
+          signature,
+          blockhash: unsignedTransaction.recentBlockhash,
+          lastValidBlockHeight: unsignedTransaction.lastValidBlockHeight,
+        },
+        "confirmed"
+      );
+
+      if (confirmation.value.err) {
+        throw new Error("Transaction failed on-chain");
+      }
+
+      return signature;
+    },
+    [publicKey, signTransaction, connected, connection]
+  );
+
+  const handleSetupMint = useCallback(async () => {
+    if (!publicKey || !signTransaction || !connected) return;
+
+    setIsSettingUpMint(true);
+    setMintSetupError(null);
+
+    try {
+      const buildRes = await fetch("/api/payments/mint", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          payer: publicKey.toBase58(),
+          mint: tokenMint,
+        }),
+      });
+
+      if (!buildRes.ok) {
+        const errData = await buildRes.json().catch(() => ({}));
+        throw new Error(errData.error || `Setup failed: ${buildRes.status}`);
+      }
+
+      const unsignedTransaction =
+        (await buildRes.json()) as UnsignedPaymentTransaction;
+
+      await signAndSendUnsignedTransaction(unsignedTransaction);
+      setIsMintInitialized(true);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Mint setup failed";
+      setMintSetupError(
+        message.includes("User rejected")
+          ? "Transaction rejected by user"
+          : message
+      );
+    } finally {
+      setIsSettingUpMint(false);
+    }
+  }, [
+    publicKey,
+    signTransaction,
+    connected,
+    tokenMint,
+    signAndSendUnsignedTransaction,
+  ]);
+
   const handleSend = useCallback(async () => {
     if (!publicKey || !signTransaction || !connected) return;
     if (!resolvedReceiver || isResolvingRecipient) return;
@@ -560,48 +825,12 @@ export function PaymentCard() {
 
       const unsignedTransaction = jsonResponse as UnsignedPaymentTransaction;
 
-      if (unsignedTransaction.version !== "legacy") {
-        throw new Error(
-          `Unsupported transaction version: ${unsignedTransaction.version}`
-        );
-      }
-
-
-      if (
-        !unsignedTransaction.requiredSigners.includes(publicKey.toBase58())
-      ) {
-        throw new Error("Wallet is not listed as a required signer");
-      }
-
       setStatus("signing");
-      const transaction = Transaction.from(
-        base64ToUint8Array(unsignedTransaction.transactionBase64)
-      );
-      const signedTransaction = await signTransaction(transaction);
-
-      setStatus("sending");
-      const signature = await connection.sendRawTransaction(
-        signedTransaction.serialize(),
-        {
-          skipPreflight: true,
-          maxRetries: 10,
-        }
+      const signature = await signAndSendUnsignedTransaction(
+        unsignedTransaction,
+        () => setStatus("sending")
       );
       setTxSignature(signature);
-
-      const confirmation = await connection.confirmTransaction(
-        {
-          signature,
-          blockhash: unsignedTransaction.recentBlockhash,
-          lastValidBlockHeight: unsignedTransaction.lastValidBlockHeight,
-        },
-        "confirmed"
-      );
-
-      if (confirmation.value.err) {
-        throw new Error("Transaction failed on-chain");
-      }
-
       setStatus("confirmed");
       dispatchPrivateBalanceRefresh();
     } catch (err: unknown) {
@@ -628,6 +857,7 @@ export function PaymentCard() {
     split,
     connection,
     isResolvingRecipient,
+    signAndSendUnsignedTransaction,
   ]);
 
   const handleReset = useCallback(() => {
@@ -635,7 +865,6 @@ export function PaymentCard() {
     setTxSignature(null);
     setError(null);
     setAmount("");
-    setReceiver("");
     setMemo("");
   }, []);
 
@@ -649,9 +878,10 @@ export function PaymentCard() {
               <div className="text-xs text-muted-foreground mb-3">You send</div>
               <div className="flex items-center justify-between">
                 <div>
+                  {/* Temporary: restore onClick, hover styles, and ChevronDown below to re-enable token selection. */}
                   <button
-                    onClick={() => setModalOpen(true)}
-                    className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-accent/60 hover:bg-accent transition-colors cursor-pointer"
+                    disabled
+                    className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-accent/60 transition-colors cursor-default"
                   >
                     {selectedToken.logoURI ? (
                       <img
@@ -668,7 +898,7 @@ export function PaymentCard() {
                     <span className="text-foreground font-semibold text-sm">
                       {selectedToken.symbol}
                     </span>
-                    <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+                    {/* <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" /> */}
                   </button>
                   {connected && publicKey && (
                     <div className="mt-1 px-1 text-xs text-muted-foreground">
@@ -738,6 +968,14 @@ export function PaymentCard() {
                   <span className="font-mono text-foreground">
                     {shortenAddress(resolvedReceiver)}
                   </span>
+                </div>
+              )}
+              {receiver && !isResolvingRecipient && isValidReceiver && (
+                <div className="mt-2 text-xs text-muted-foreground">
+                  Balance:{" "}
+                  {isRecipientTokenBalanceLoading
+                    ? "..."
+                    : `${recipientTokenBalance ?? "0"} ${selectedToken.symbol}`}
                 </div>
               )}
               {receiver && !isResolvingRecipient && !isValidReceiver && !isDomainReceiver && (
@@ -903,7 +1141,7 @@ export function PaymentCard() {
               <span className="text-xs text-destructive">{error}</span>
               {txSignature && (
                 <a
-                  href={`https://solscan.io/tx/${txSignature}`}
+                  href={`/api/explorer/tx?signature=${encodeURIComponent(txSignature)}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="shrink-0 flex items-center gap-1 text-xs text-destructive hover:underline"
@@ -915,6 +1153,39 @@ export function PaymentCard() {
             </div>
           )}
 
+          {isMintInitialized === false && (
+            <div className="mx-3 mt-2 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3">
+              <div className="min-w-0">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-foreground">
+                        Private payments are not enabled for this mint yet.
+                      </div>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        Pay the fees (~0.2 SOL) and set it up permissionlessly.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={connected ? handleSetupMint : openConnectModal}
+                      disabled={isSettingUpMint}
+                      className="mt-0.5 inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isSettingUpMint && <Loader2 className="h-4 w-4 animate-spin" />}
+                      {connected ? "Set Up" : "Connect Wallet to Set Up"}
+                    </button>
+                  </div>
+                  {mintSetupError && (
+                    <div className="mt-2 text-xs text-destructive">
+                      {mintSetupError}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Success */}
           {status === "confirmed" && txSignature && (
             <div className="mx-3 mt-2 flex items-center justify-between px-3 py-2 rounded-lg bg-success/10 border border-success/20">
@@ -923,7 +1194,7 @@ export function PaymentCard() {
                 <span className="text-xs text-success">Payment sent!</span>
               </div>
               <a
-                href={`https://solscan.io/tx/${txSignature}`}
+                href={`/api/explorer/tx?signature=${encodeURIComponent(txSignature)}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-1 text-xs text-success hover:underline"
@@ -946,7 +1217,9 @@ export function PaymentCard() {
               receiver={receiver}
               tokenSymbol={selectedToken.symbol}
               isPrivate={isPrivate}
-              onConnect={() => openWalletModal(true)}
+              onConnect={openConnectModal}
+              isMintInitializationLoading={isMintInitializationLoading}
+              requiresMintSetup={isPrivate && isMintInitialized === false}
               onSend={handleSend}
               onRetry={() => {
                 setStatus("idle");
@@ -979,6 +1252,8 @@ function PaymentActionButton({
   receiver,
   tokenSymbol,
   isPrivate,
+  isMintInitializationLoading,
+  requiresMintSetup,
   onConnect,
   onSend,
   onRetry,
@@ -993,6 +1268,8 @@ function PaymentActionButton({
   receiver: string;
   tokenSymbol: string;
   isPrivate: boolean;
+  isMintInitializationLoading: boolean;
+  requiresMintSetup: boolean;
   onConnect: () => void;
   onSend: () => void;
   onRetry: () => void;
@@ -1060,6 +1337,28 @@ function PaymentActionButton({
         className="w-full py-4 rounded-xl bg-secondary text-muted-foreground font-semibold text-base cursor-not-allowed"
       >
         Invalid recipient address
+      </button>
+    );
+  }
+
+  if (isPrivate && isMintInitializationLoading) {
+    return (
+      <button
+        disabled
+        className="w-full py-4 rounded-xl bg-secondary text-muted-foreground font-semibold text-base cursor-not-allowed"
+      >
+        Checking mint setup...
+      </button>
+    );
+  }
+
+  if (requiresMintSetup) {
+    return (
+      <button
+        disabled
+        className="w-full py-4 rounded-xl bg-secondary text-muted-foreground font-semibold text-base cursor-not-allowed"
+      >
+        Set up this mint to continue
       </button>
     );
   }

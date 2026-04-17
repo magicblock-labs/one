@@ -6,13 +6,14 @@ import {
   ExternalLink,
   Code2,
   CircleHelp /*, Settings, BarChart3 */,
+  Menu,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, useCallback } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
 import { AnimatedLogo } from "./animated-logo";
-import { WalletButton } from "./wallet-button";
+import { WalletButton } from "../../app/wallet/wallet-button";
+import { useUnifiedWallet } from "@/app/wallet/solana-wallet-provider";
 // import {
 //   Tooltip,
 //   TooltipContent,
@@ -31,16 +32,23 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const FAQ_ITEMS = [
   {
     value: "item-0",
-    question: "Is MagicBlock Payment API a mixer?",
+    question: "Is MagicBlock Private Payment API a mixer?",
     answer: (
       <>
         <p>No.</p>
         <p className="mt-3">
-          MagicBlock Payment API is not a mixer and does not rely on pooling or
+          MagicBlock Private Payment API is not a mixer and does not rely on pooling or
           redistributing user funds to obscure ownership.
         </p>
         <p className="mt-3">
@@ -98,15 +106,14 @@ const FAQ_ITEMS = [
     question: "How does MagicBlock support compliance?",
     answer: (
       <>
-        <p>MagicBlock Payment API is designed to support compliance through:</p>
+        <p>MagicBlock Private Payment API is designed to support compliance through:</p>
         <ul className="mt-3 list-disc space-y-1 pl-5">
-          <li>Permissioned execution and policy enforcement</li>
-          <li>AML and risk screening of participating wallets</li>
-          <li>Controlled authorization of fund release from the vault</li>
+          <li>Geo-fencing & Policy-based Access Controls</li>
+          <li>AML risk screening of wallets and transactions</li>
+          <li>EULA & Licensed deployments</li>
         </ul>
         <p className="mt-3">
-          This approach enables privacy-preserving payments while maintaining
-          alignment with compliance requirements.
+          For more information refer to our [compliance framework](https://docs.magicblock.gg/pages/private-ephemeral-rollups-pers/introduction/compliance-framework) 
         </p>
       </>
     ),
@@ -117,14 +124,13 @@ const FAQ_ITEMS = [
     answer: (
       <>
         <p>
-          MagicBlock relies on execution within a Trusted Execution Environment
-          (TEE) to process private intents securely.
+          MagicBlock PERs combine execution within the latest Intel Trusted Domain Extension (TDX) with onchain permission access to process private intents securely.
         </p>
         <p className="mt-3">Users and integrators should consider:</p>
         <ul className="mt-3 list-disc space-y-1 pl-5">
-          <li>The security guarantees and limitations of the TEE</li>
           <li>The correctness of the underlying Solana smart contracts</li>
           <li>The policies governing access and transaction authorization</li>
+          <li>The security guarantees of the hardware manufacturer (Intel TDX)</li>
         </ul>
       </>
     ),
@@ -133,7 +139,7 @@ const FAQ_ITEMS = [
 
 export function Header() {
   const pathname = usePathname();
-  const { publicKey /*, connected */ } = useWallet();
+  const { publicKey } = useUnifiedWallet();
   const [referModalOpen, setReferModalOpen] = useState(false);
   const [faqModalOpen, setFaqModalOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -161,7 +167,7 @@ export function Header() {
   // };
 
   return (
-    <header className="sticky top-0 z-50 flex items-center justify-between px-6 py-4 bg-background/80 backdrop-blur-md">
+    <header className="sticky top-0 z-50 flex items-center justify-between bg-background/80 px-4 py-4 backdrop-blur-md sm:px-6">
       {/* Logo */}
       <Link href="/" aria-label="MagicBlock One" className="flex items-center gap-2">
         <AnimatedLogo className="h-6 w-[7.75rem] sm:h-7 sm:w-[8.75rem]" />
@@ -175,11 +181,11 @@ export function Header() {
         </div>
       </Link>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-2 sm:gap-4">
         <button
           type="button"
           onClick={() => setFaqModalOpen(true)}
-          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+          className="hidden cursor-pointer items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground sm:flex"
         >
           <CircleHelp className="w-4 h-4" />
           <span className="hidden sm:inline">FAQ</span>
@@ -215,7 +221,7 @@ export function Header() {
           href="https://docs.magicblock.gg/pages/private-ephemeral-rollups-pers/how-to-guide/quickstart"
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+          className="hidden cursor-pointer items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground sm:flex"
         >
           <ExternalLink className="w-4 h-4" />
           <span className="hidden sm:inline">Documentation</span>
@@ -226,11 +232,56 @@ export function Header() {
           href="https://payments.magicblock.app/"
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+          className="hidden cursor-pointer items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground sm:flex"
         >
           <Code2 className="w-4 h-4" />
           <span className="hidden sm:inline">Developer API</span>
         </a>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label="Open navigation menu"
+              className="flex h-10 w-10 cursor-pointer items-center justify-center rounded-full border border-border bg-transparent text-foreground transition-colors hover:bg-accent sm:hidden"
+            >
+              <Menu className="h-4 w-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            className="w-52 border-border bg-card p-1.5 sm:hidden"
+          >
+            <DropdownMenuItem
+              onSelect={() => setFaqModalOpen(true)}
+              className="cursor-pointer gap-2.5"
+            >
+              <CircleHelp className="h-4 w-4" />
+              FAQ
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem asChild className="cursor-pointer gap-2.5">
+              <a
+                href="https://docs.magicblock.gg/pages/private-ephemeral-rollups-pers/how-to-guide/quickstart"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <ExternalLink className="h-4 w-4" />
+                Documentation
+              </a>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild className="cursor-pointer gap-2.5">
+              <a
+                href="https://payments.magicblock.app/"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <Code2 className="h-4 w-4" />
+                Developer API
+              </a>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         <Dialog open={faqModalOpen} onOpenChange={setFaqModalOpen}>
           <DialogContent className="max-h-[80vh] max-w-2xl overflow-hidden border-border bg-card p-0 gap-0">

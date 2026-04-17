@@ -1,9 +1,9 @@
 "use client";
 
-import { useWallet } from "@solana/wallet-adapter-react";
 import bs58 from "bs58";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { useUnifiedWallet } from "@/app/wallet/solana-wallet-provider";
 import { useAggregatorTokens } from "@/hooks/use-aggregator-tokens";
 import { PRIVATE_BALANCE_REFRESH_EVENT } from "@/lib/private-balance-refresh";
 import { PAYMENTS_DEFAULT_USDC_MINT } from "@/lib/payments";
@@ -19,7 +19,7 @@ import {
 import { findTokenByMint, SOL_MINT } from "@/lib/tokens";
 
 export function NetWorthPanel() {
-  const { connected, publicKey, signMessage } = useWallet();
+  const { connected, publicKey, signMessage } = useUnifiedWallet();
   const { tokens } = useAggregatorTokens();
 
   const owner = publicKey?.toBase58() ?? null;
@@ -33,12 +33,10 @@ export function NetWorthPanel() {
 
   const rows = useMemo(() => {
     return [SOL_MINT, PAYMENTS_DEFAULT_USDC_MINT].map((mint) => {
-      const meta =
-        findTokenByMint(mint, tokens) ?? findTokenByMint(mint);
+      const meta = findTokenByMint(mint, tokens) ?? findTokenByMint(mint);
       return {
         mint,
-        decimals:
-          meta?.decimals ?? (mint === SOL_MINT ? 9 : 6),
+        decimals: meta?.decimals ?? (mint === SOL_MINT ? 9 : 6),
         symbol: meta?.symbol ?? mint.slice(0, 4),
         logoURI: meta?.logoURI ?? "",
       };
@@ -130,7 +128,11 @@ export function NetWorthPanel() {
       const message = new TextEncoder().encode(challenge);
       const sigBytes = await signMessage(message);
       const signature = bs58.encode(sigBytes);
-      const token = await loginSplPrivate({ pubkey: owner, challenge, signature });
+      const token = await loginSplPrivate({
+        pubkey: owner,
+        challenge,
+        signature,
+      });
       setStoredPrivateAuthToken(owner, token);
       setAuthToken(token);
     } catch (e) {
@@ -154,39 +156,9 @@ export function NetWorthPanel() {
 
   return (
     <div className="hidden xl:block fixed top-20 right-4 w-[220px] rounded-2xl bg-[var(--surface-container)] border border-border/40 p-4 shadow-lg shadow-black/20">
-      <div className="space-y-3">
-        <div className="text-xs text-muted-foreground">Private Balance</div>
-
-        {displayRows.map(({ mint, symbol, logoURI, decimals }) => (
-          <div key={mint} className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              {logoURI ? (
-                <img
-                  src={logoURI}
-                  alt=""
-                  className="w-5 h-5 rounded-full"
-                />
-              ) : (
-                <div className="w-5 h-5 rounded-full bg-muted flex items-center justify-center text-[10px] font-semibold text-muted-foreground">
-                  {symbol.charAt(0)}
-                </div>
-              )}
-              <span className="text-sm font-medium text-foreground">{symbol}</span>
-            </div>
-            <span className="text-sm text-foreground tabular-nums">
-              {balanceLabel(mint, decimals)}
-            </span>
-          </div>
-        ))}
-
-        {balanceError && (
-          <p className="text-xs text-destructive">{balanceError}</p>
-        )}
-      </div>
-
-      {needsAuthOverlay && (
+      {needsAuthOverlay ? (
         <div
-          className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-2xl bg-background/55 backdrop-blur-md px-3 py-4 border border-border/30"
+          className="inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-2xl"
           aria-live="polite"
         >
           <p className="text-xs text-center text-muted-foreground">
@@ -207,9 +179,39 @@ export function NetWorthPanel() {
                 {authBusy ? "Signing…" : "Authenticate"}
               </button>
               {authError && (
-                <p className="text-xs text-center text-destructive">{authError}</p>
+                <p className="text-xs text-center text-destructive">
+                  {authError}
+                </p>
               )}
             </>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="text-xs text-muted-foreground">Private Balance</div>
+
+          {displayRows.map(({ mint, symbol, logoURI, decimals }) => (
+            <div key={mint} className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {logoURI ? (
+                  <img src={logoURI} alt="" className="w-5 h-5 rounded-full" />
+                ) : (
+                  <div className="w-5 h-5 rounded-full bg-muted flex items-center justify-center text-[10px] font-semibold text-muted-foreground">
+                    {symbol.charAt(0)}
+                  </div>
+                )}
+                <span className="text-sm font-medium text-foreground">
+                  {symbol}
+                </span>
+              </div>
+              <span className="text-sm text-foreground tabular-nums">
+                {balanceLabel(mint, decimals)}
+              </span>
+            </div>
+          ))}
+
+          {balanceError && (
+            <p className="text-xs text-destructive">{balanceError}</p>
           )}
         </div>
       )}

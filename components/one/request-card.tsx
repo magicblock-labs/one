@@ -2,7 +2,6 @@
 
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import {
-  ChevronDown,
   Copy,
   Check,
   X,
@@ -13,8 +12,6 @@ import {
   Tag,
 } from "lucide-react";
 import { QRCodeCanvas } from "qrcode.react";
-import { useWallet } from "@solana/wallet-adapter-react";
-import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   type AggregatorToken,
@@ -31,6 +28,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useUnifiedWallet } from "@/app/wallet/solana-wallet-provider";
 
 interface PaymentRequest {
   id: string;
@@ -49,8 +47,7 @@ export function RequestCard() {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { connected, publicKey } = useWallet();
-  const { setVisible: openWalletModal } = useWalletModal();
+  const { connected, openConnectModal, publicKey } = useUnifiedWallet();
 
   const [name, setName] = useState(() => searchParams.get("prd") ?? "");
   const [description, setDescription] = useState("");
@@ -301,9 +298,10 @@ export function RequestCard() {
             <div className="rounded-xl bg-[var(--surface-inner)] border border-border/50 p-4">
               <div className="text-xs text-muted-foreground mb-3">Request Amount</div>
               <div className="flex items-center justify-between">
+                {/* Temporary: restore onClick, hover styles, and ChevronDown below to re-enable token selection. */}
                 <button
-                  onClick={() => setModalOpen(true)}
-                  className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-accent/60 hover:bg-accent transition-colors cursor-pointer"
+                  disabled
+                  className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-accent/60 transition-colors cursor-default"
                 >
                   {selectedToken.logoURI ? (
                     <img
@@ -320,7 +318,7 @@ export function RequestCard() {
                   <span className="text-foreground font-semibold text-sm">
                     {selectedToken.symbol}
                   </span>
-                  <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+                  {/* <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" /> */}
                 </button>
                 <div className="text-right">
                   <input
@@ -372,7 +370,7 @@ export function RequestCard() {
           <div className="p-3 pt-3">
             {!connected ? (
               <button
-                onClick={() => openWalletModal(true)}
+                onClick={openConnectModal}
                 className="w-full py-4 rounded-xl bg-primary text-primary-foreground font-semibold text-base hover:brightness-110 active:scale-[0.99] transition-all cursor-pointer"
               >
                 Connect Wallet
