@@ -102,7 +102,7 @@ export async function POST(request: NextRequest) {
         ...(PAYMENTS_CLUSTER ? { cluster: PAYMENTS_CLUSTER } : {}),
         mint,
         amount: Number(amountBigInt),
-        visibility,On
+        visibility,
         fromBalance: "base",
         toBalance: "base",
         initIfMissing: true,
