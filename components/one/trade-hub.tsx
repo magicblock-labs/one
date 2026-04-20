@@ -126,7 +126,7 @@ export function TradeHub({
   return (
     <div className="w-full max-w-[480px] mx-auto">
       {showPrivatePaymentsNotice && (
-        <div className="pointer-events-none fixed bottom-4 left-1/2 z-30 w-[calc(100vw-2rem)] max-w-[44rem] -translate-x-1/2 xl:max-w-[52rem]">
+        <div className="mb-4 w-full pointer-events-none sm:fixed sm:bottom-4 sm:left-1/2 sm:z-30 sm:w-[calc(100vw-2rem)] sm:max-w-[44rem] sm:-translate-x-1/2 xl:max-w-[52rem]">
           <div className="rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-4 py-3 shadow-lg shadow-black/20 backdrop-blur-md">
             <div className="flex items-start gap-2.5">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-400" />
