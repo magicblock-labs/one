@@ -22,7 +22,12 @@ import {
   PhantomWalletAdapter,
   SolflareWalletAdapter,
 } from "@solana/wallet-adapter-wallets";
-import { Connection, PublicKey, Transaction, VersionedTransaction } from "@solana/web3.js";
+import {
+  Connection,
+  PublicKey,
+  Transaction,
+  VersionedTransaction,
+} from "@solana/web3.js";
 import {
   createSolanaRpc,
   createSolanaRpcSubscriptions,
@@ -68,19 +73,20 @@ type UnifiedWalletContextValue = {
   connectPrivyWallet: () => Promise<void>;
   disconnect: () => Promise<void>;
   signTransaction: <T extends Transaction | VersionedTransaction>(
-    transaction: T
+    transaction: T,
   ) => Promise<T>;
+  signMessage: (message: Uint8Array) => Promise<Uint8Array>;
   sendTransaction: (
     transaction: Transaction | VersionedTransaction,
     connection: Connection,
-    options?: UnifiedSendTransactionOptions
+    options?: UnifiedSendTransactionOptions,
   ) => Promise<string>;
 };
 
 const ACTIVE_WALLET_STORAGE_KEY = "magicblock-pay.active-wallet-type";
 
 const UnifiedWalletContext = createContext<UnifiedWalletContextValue | null>(
-  null
+  null,
 );
 const base58Decoder = getBase58Decoder();
 
@@ -107,7 +113,7 @@ function getSolanaWsEndpoint(endpoint: string) {
 }
 
 function getSolanaExplorerUrl(
-  chain: "solana:mainnet" | "solana:devnet" | "solana:testnet"
+  chain: "solana:mainnet" | "solana:devnet" | "solana:testnet",
 ) {
   if (chain === "solana:devnet") {
     return "https://explorer.solana.com/?cluster=devnet";
@@ -126,7 +132,7 @@ function shortenAddress(address: string | null) {
 }
 
 function serializeTransaction(
-  transaction: Transaction | VersionedTransaction
+  transaction: Transaction | VersionedTransaction,
 ): Uint8Array {
   if (transaction instanceof VersionedTransaction) {
     return transaction.serialize();
@@ -140,7 +146,7 @@ function serializeTransaction(
 
 function deserializeTransaction<T extends Transaction | VersionedTransaction>(
   original: T,
-  serializedTransaction: Uint8Array
+  serializedTransaction: Uint8Array,
 ): T {
   if (original instanceof VersionedTransaction) {
     return VersionedTransaction.deserialize(serializedTransaction) as T;
@@ -211,6 +217,7 @@ function UnifiedWalletContextProvider({
     publicKey: solanaPublicKey,
     sendTransaction: sendSolanaTransaction,
     signTransaction: signSolanaTransaction,
+    signMessage: signSolanaMessage,
     wallet: solanaWallet,
   } = useWallet();
   const { setVisible: setWalletModalVisible } = useWalletModal();
@@ -228,7 +235,7 @@ function UnifiedWalletContextProvider({
   useEffect(() => {
     if (typeof window === "undefined") return;
     const storedWalletType = window.localStorage.getItem(
-      ACTIVE_WALLET_STORAGE_KEY
+      ACTIVE_WALLET_STORAGE_KEY,
     ) as UnifiedWalletType;
     if (
       storedWalletType === "solana" ||
@@ -239,17 +246,20 @@ function UnifiedWalletContextProvider({
     }
   }, []);
 
-  const persistPreferredWalletType = useCallback((walletType: UnifiedWalletType) => {
-    setPreferredWalletType(walletType);
-    if (typeof window === "undefined") return;
+  const persistPreferredWalletType = useCallback(
+    (walletType: UnifiedWalletType) => {
+      setPreferredWalletType(walletType);
+      if (typeof window === "undefined") return;
 
-    if (walletType) {
-      window.localStorage.setItem(ACTIVE_WALLET_STORAGE_KEY, walletType);
-      return;
-    }
+      if (walletType) {
+        window.localStorage.setItem(ACTIVE_WALLET_STORAGE_KEY, walletType);
+        return;
+      }
 
-    window.localStorage.removeItem(ACTIVE_WALLET_STORAGE_KEY);
-  }, []);
+      window.localStorage.removeItem(ACTIVE_WALLET_STORAGE_KEY);
+    },
+    [],
+  );
 
   const privyWallet = privyWallets[0] ?? null;
 
@@ -303,8 +313,8 @@ function UnifiedWalletContextProvider({
 
   const address =
     activeWalletType === "solana"
-      ? solanaPublicKey?.toBase58() ?? null
-      : privyWallet?.address ?? null;
+      ? (solanaPublicKey?.toBase58() ?? null)
+      : (privyWallet?.address ?? null);
 
   const publicKey = useMemo(() => {
     if (!address) return null;
@@ -367,14 +377,37 @@ function UnifiedWalletContextProvider({
 
       throw new Error("Wallet not connected");
     },
-    [activeWalletType, privySolanaChain, privyWallet, signSolanaTransaction]
+    [activeWalletType, privySolanaChain, privyWallet, signSolanaTransaction],
+  );
+
+  const signMessage = useCallback(
+    async (message: Uint8Array) => {
+      if (activeWalletType === "solana") {
+        if (!signSolanaMessage) {
+          throw new Error("Selected Solana wallet cannot sign messages");
+        }
+
+        return await signSolanaMessage(message);
+      }
+
+      if (activeWalletType === "privy" && privyWallet) {
+        const { signature } = await privyWallet.signMessage({
+          message,
+        });
+
+        return signature;
+      }
+
+      throw new Error("Wallet not connected");
+    },
+    [activeWalletType, privySolanaChain, privyWallet, signSolanaMessage],
   );
 
   const sendTransaction = useCallback(
     async (
       transaction: Transaction | VersionedTransaction,
       connection: Connection,
-      options?: UnifiedSendTransactionOptions
+      options?: UnifiedSendTransactionOptions,
     ) => {
       if (activeWalletType === "solana") {
         if (!publicKey) {
@@ -398,20 +431,26 @@ function UnifiedWalletContextProvider({
 
       throw new Error("Wallet not connected");
     },
-    [activeWalletType, privySolanaChain, privyWallet, publicKey, sendSolanaTransaction]
+    [
+      activeWalletType,
+      privySolanaChain,
+      privyWallet,
+      publicKey,
+      sendSolanaTransaction,
+    ],
   );
 
   const walletLabel =
     activeWalletType === "solana"
-      ? solanaWallet?.adapter.name ?? "Solana Wallet"
+      ? (solanaWallet?.adapter.name ?? "Solana Wallet")
       : activeWalletType === "privy"
-        ? privyWallet?.standardWallet.name ?? "Privy"
+        ? (privyWallet?.standardWallet.name ?? "Privy")
         : null;
   const walletIcon =
     activeWalletType === "solana"
-      ? solanaWallet?.adapter.icon ?? null
+      ? (solanaWallet?.adapter.icon ?? null)
       : activeWalletType === "privy"
-        ? privyWallet?.standardWallet.icon ?? null
+        ? (privyWallet?.standardWallet.icon ?? null)
         : null;
 
   const value = useMemo<UnifiedWalletContextValue>(
@@ -429,6 +468,7 @@ function UnifiedWalletContextProvider({
       connectPrivyWallet,
       disconnect,
       signTransaction,
+      signMessage,
       sendTransaction,
     }),
     [
@@ -443,9 +483,10 @@ function UnifiedWalletContextProvider({
       publicKey,
       sendTransaction,
       signTransaction,
+      signMessage,
       walletIcon,
       walletLabel,
-    ]
+    ],
   );
 
   return (
@@ -465,7 +506,9 @@ export function useUnifiedWallet() {
   const context = useContext(UnifiedWalletContext);
 
   if (!context) {
-    throw new Error("useUnifiedWallet must be used within SolanaWalletProvider");
+    throw new Error(
+      "useUnifiedWallet must be used within SolanaWalletProvider",
+    );
   }
 
   return context;
@@ -473,24 +516,27 @@ export function useUnifiedWallet() {
 
 export function SolanaWalletProvider({ children }: { children: ReactNode }) {
   const endpoint = useMemo(() => SOLANA_PUBLIC_RPC_ENDPOINT, []);
-  const privySolanaChain = useMemo(() => getPrivySolanaChain(endpoint), [endpoint]);
+  const privySolanaChain = useMemo(
+    () => getPrivySolanaChain(endpoint),
+    [endpoint],
+  );
   const privySolanaConfig = useMemo(
     () => ({
       rpcs: {
         [privySolanaChain]: {
           rpc: createSolanaRpc(endpoint),
           rpcSubscriptions: createSolanaRpcSubscriptions(
-            getSolanaWsEndpoint(endpoint)
+            getSolanaWsEndpoint(endpoint),
           ),
           blockExplorerUrl: getSolanaExplorerUrl(privySolanaChain),
         },
       },
     }),
-    [endpoint, privySolanaChain]
+    [endpoint, privySolanaChain],
   );
   const wallets = useMemo(
     () => [new PhantomWalletAdapter(), new SolflareWalletAdapter()],
-    []
+    [],
   );
 
   return (
@@ -502,9 +548,9 @@ export function SolanaWalletProvider({ children }: { children: ReactNode }) {
             clientId={PRIVY_CLIENT_ID}
             config={{
               appearance: {
-                theme: 'dark',
-                accentColor: '#696FFD',
-                logo: '/images/magicblock-logo.png',
+                theme: "dark",
+                accentColor: "#696FFD",
+                logo: "/images/magicblock-logo.png",
               },
               solana: privySolanaConfig,
               loginMethods: ["email"],
