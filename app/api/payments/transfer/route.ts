@@ -13,6 +13,7 @@ interface PaymentTransferBuildRequest {
   mint?: string;
   amount?: string;
   visibility?: "public" | "private";
+  gasless?: boolean;
   memo?: string;
   minDelayMs?: string;
   maxDelayMs?: string;
@@ -24,13 +25,14 @@ const MAX_PRIVATE_DELAY_MS = BigInt(30 * 60 * 1000);
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as PaymentTransferBuildRequest;
-    const { from, to, mint, amount, visibility, memo, minDelayMs, maxDelayMs, split } = body;
+    const { from, to, mint, amount, visibility, gasless, memo, minDelayMs, maxDelayMs, split } = body;
 
     if (
       typeof from !== "string" ||
       typeof to !== "string" ||
       typeof mint !== "string" ||
       typeof amount !== "string" ||
+      (gasless !== undefined && typeof gasless !== "boolean") ||
       (memo !== undefined && typeof memo !== "string") ||
       (minDelayMs !== undefined &&
         (typeof minDelayMs !== "string" || !/^\d+$/.test(minDelayMs))) ||
@@ -108,6 +110,7 @@ export async function POST(request: NextRequest) {
         initIfMissing: true,
         initAtasIfMissing: true,
         initVaultIfMissing: false,
+        ...(visibility === "private" && gasless === true ? { gasless: true } : {}),
         ...(memo ? { memo } : {}),
         ...(visibility === "private" && minDelayMs !== undefined
           ? { minDelayMs }
