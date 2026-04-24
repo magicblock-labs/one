@@ -1234,7 +1234,7 @@ export function PaymentCard() {
                   ? "Enabled automatically because your wallet has no SOL."
                   : walletSolLamports === 0
                     ? "Your wallet has no SOL. Turn this on if you want a sponsor to cover the network fees."
-                  : "Sponsor pays SOL. The transfer still charges token fees."}
+                    : "Sponsor pays SOL. The transfer still charges token fees."}
               </div>
             </div>
             <Switch
