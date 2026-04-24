@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   Loader2,
   ExternalLink,
   Check,
+  CircleHelp,
   Shield,
   ShieldCheck,
   User,
@@ -31,6 +32,12 @@ import { usePrices } from "@/hooks/use-sol-price";
 import { useAggregatorTokens } from "@/hooks/use-aggregator-tokens";
 import { PAYMENTS_DEFAULT_USDC_MINT } from "@/lib/payments";
 import { Slider } from "@/components/ui/slider";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
 import { TokenSelectModal } from "./token-select-modal";
 import { useUnifiedWallet } from "@/app/wallet/solana-wallet-provider";
 
@@ -240,13 +247,14 @@ export function PaymentCard() {
     : 0;
   const initialMaxDelayMs = isInitiallyPrivate
     ? Math.max(
-        initialMinDelayMs,
-        parseIntegerParam(searchParams.get("max"), 0, 0, MAX_PRIVATE_DELAY_MS)
-      )
+      initialMinDelayMs,
+      parseIntegerParam(searchParams.get("max"), 0, 0, MAX_PRIVATE_DELAY_MS)
+    )
     : 0;
   const initialSplit = isInitiallyPrivate
     ? clampSplit(parseIntegerParam(searchParams.get("split"), 1, 1, 10))
     : 1;
+  const initialGasless = searchParams.get("gasless") === "1";
   const { connection } = useConnection();
   const { connected, openConnectModal, publicKey, signTransaction } =
     useUnifiedWallet();
@@ -258,6 +266,7 @@ export function PaymentCard() {
   const [receiver, setReceiver] = useState(() => searchParams.get("rcv") ?? "");
   const [memo, setMemo] = useState(() => searchParams.get("memo") ?? "");
   const [isPrivate, setIsPrivate] = useState(() => isInitiallyPrivate);
+  const [isGasless, setIsGasless] = useState(() => initialGasless);
   const [minDelayMs, setMinDelayMs] = useState(() => initialMinDelayMs);
   const [maxDelayMs, setMaxDelayMs] = useState(() => initialMaxDelayMs);
   const [split, setSplit] = useState(() => initialSplit);
@@ -267,6 +276,7 @@ export function PaymentCard() {
   const [isResolvingRecipient, setIsResolvingRecipient] = useState(false);
   const [walletTokenBalance, setWalletTokenBalance] = useState<string | null>(null);
   const [isWalletTokenBalanceLoading, setIsWalletTokenBalanceLoading] = useState(false);
+  const [walletSolLamports, setWalletSolLamports] = useState<number | null>(null);
   const [recipientTokenBalance, setRecipientTokenBalance] = useState<string | null>(null);
   const [isRecipientTokenBalanceLoading, setIsRecipientTokenBalanceLoading] = useState(false);
   const [isMintInitialized, setIsMintInitialized] = useState<boolean | null>(null);
@@ -278,6 +288,7 @@ export function PaymentCard() {
   const [txSignature, setTxSignature] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const gaslessAutoOptOutRef = useRef(false);
 
   const { tokens } = useAggregatorTokens();
 
@@ -418,6 +429,59 @@ export function PaymentCard() {
       cancelled = true;
     };
   }, [connection, directReceiverAddress]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!connected || !publicKey) {
+      setWalletSolLamports(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const refreshWalletSolBalance = async () => {
+      try {
+        const lamports = await connection.getBalance(publicKey, "confirmed");
+        if (cancelled) return;
+        setWalletSolLamports(lamports);
+      } catch {
+        if (cancelled) return;
+        setWalletSolLamports(null);
+      }
+    };
+
+    void refreshWalletSolBalance();
+
+    const subscriptionId = connection.onAccountChange(
+      publicKey,
+      (accountInfo) => {
+        if (cancelled) return;
+        setWalletSolLamports(accountInfo.lamports);
+      },
+      "confirmed"
+    );
+
+    return () => {
+      cancelled = true;
+      void connection.removeAccountChangeListener(subscriptionId);
+    };
+  }, [connection, connected, publicKey]);
+
+  useEffect(() => {
+    if (walletSolLamports === null || walletSolLamports > 0) {
+      gaslessAutoOptOutRef.current = false;
+      return;
+    }
+
+    if (walletSolLamports === 0 && !isGasless && !gaslessAutoOptOutRef.current) {
+      setIsGasless(true);
+    }
+  }, [walletSolLamports, isGasless]);
+
+  useEffect(() => {
+    gaslessAutoOptOutRef.current = false;
+  }, [publicKey?.toBase58()]);
 
   useEffect(() => {
     let cancelled = false;
@@ -584,10 +648,12 @@ export function PaymentCard() {
     const currentMinDelayMs = params.get("min") ?? "";
     const currentMaxDelayMs = params.get("max") ?? "";
     const currentSplit = params.get("split") ?? "";
+    const currentGasless = params.get("gasless") ?? "";
     const currentTab = params.get("tab") ?? "";
     const nextMinDelayMs = shouldPersistRoutingParams ? String(minDelayMs) : "";
     const nextMaxDelayMs = shouldPersistRoutingParams ? String(maxDelayMs) : "";
     const nextSplit = shouldPersistRoutingParams ? String(split) : "";
+    const nextGasless = isGasless ? "1" : "";
     const hasForeignParams =
       SWAP_QUERY_PARAMS.some((key) => params.has(key)) ||
       REQUEST_QUERY_PARAMS.some((key) => params.has(key));
@@ -600,6 +666,7 @@ export function PaymentCard() {
       currentMinDelayMs === nextMinDelayMs &&
       currentMaxDelayMs === nextMaxDelayMs &&
       currentSplit === nextSplit &&
+      currentGasless === nextGasless &&
       !currentTab &&
       !hasForeignParams
     ) {
@@ -644,6 +711,12 @@ export function PaymentCard() {
       params.delete("split");
     }
 
+    if (isGasless) {
+      params.set("gasless", "1");
+    } else {
+      params.delete("gasless");
+    }
+
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname, {
       scroll: false,
@@ -653,6 +726,7 @@ export function PaymentCard() {
     tokenMint,
     memo,
     isPrivate,
+    isGasless,
     minDelayMs,
     maxDelayMs,
     split,
@@ -695,6 +769,15 @@ export function PaymentCard() {
     [resetResultState]
   );
 
+  const handleGaslessChange = useCallback(
+    (checked: boolean) => {
+      resetResultState();
+      gaslessAutoOptOutRef.current = walletSolLamports === 0 && !checked;
+      setIsGasless(checked);
+    },
+    [resetResultState, walletSolLamports]
+  );
+
   const signAndSendUnsignedTransaction = useCallback(
     async (
       unsignedTransaction: UnsignedPaymentTransaction,
@@ -731,7 +814,7 @@ export function PaymentCard() {
       );
 
       if (confirmation.value.err) {
-        throw new Error("Transaction failed on-chain");
+        throw new Error(`Transaction failed on-chain: ${signature}`);
       }
 
       return signature;
@@ -802,13 +885,14 @@ export function PaymentCard() {
           mint: tokenMint,
           amount: rawAmount,
           visibility: isPrivate ? "private" : "public",
+          ...(isGasless ? { gasless: true } : {}),
           ...(memo ? { memo } : {}),
           ...(isPrivate
             ? {
-                minDelayMs: String(minDelayMs),
-                maxDelayMs: String(maxDelayMs),
-                split,
-              }
+              minDelayMs: String(minDelayMs),
+              maxDelayMs: String(maxDelayMs),
+              split,
+            }
             : {}),
         }),
       });
@@ -849,6 +933,7 @@ export function PaymentCard() {
     resolvedReceiver,
     tokenMint,
     isPrivate,
+    isGasless,
     memo,
     minDelayMs,
     maxDelayMs,
@@ -1059,56 +1144,104 @@ export function PaymentCard() {
               </label>
 
               <div
-                className={`overflow-hidden transition-all duration-300 ease-in-out ${
-                  isPrivate ? "max-h-24 opacity-100" : "max-h-0 opacity-0"
-                }`}
+                className={`overflow-hidden transition-all duration-300 ease-in-out ${isPrivate ? "max-h-40 opacity-100" : "max-h-0 opacity-0"
+                  }`}
               >
-                <div className="flex items-center gap-2 border-t border-border/20 px-4 pb-2.5 pt-2">
-                  <div className="min-w-0 flex-1 px-1">
-                    <Slider
-                      aria-label="Private delay range"
-                      value={[minDelayMs, maxDelayMs]}
-                      min={0}
-                      max={MAX_PRIVATE_DELAY_MS}
-                      step={1000}
-                      onValueChange={handleDelayRangeChange}
-                    />
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    {[1, 2, 4].map((preset) => {
-                      const isActive = split === preset;
-                      return (
-                        <button
-                          key={preset}
-                          type="button"
-                          onClick={() => handleSplitChange(preset)}
-                          className={`h-6 min-w-6 rounded-full px-1.5 text-[11px] font-medium transition-colors cursor-pointer ${
-                            isActive
+                <div className="border-t border-border/20 px-4 pb-2.5 pt-2">
+                  <div className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1 px-1">
+                      <Slider
+                        aria-label="Private delay range"
+                        value={[minDelayMs, maxDelayMs]}
+                        min={0}
+                        max={MAX_PRIVATE_DELAY_MS}
+                        step={1000}
+                        onValueChange={handleDelayRangeChange}
+                      />
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      {[1, 2, 4].map((preset) => {
+                        const isActive = split === preset;
+                        return (
+                          <button
+                            key={preset}
+                            type="button"
+                            onClick={() => handleSplitChange(preset)}
+                            className={`h-6 min-w-6 rounded-full px-1.5 text-[11px] font-medium transition-colors cursor-pointer ${isActive
                               ? "bg-primary text-primary-foreground"
                               : "bg-secondary text-muted-foreground hover:text-foreground"
-                          }`}
-                        >
-                          {preset}
-                        </button>
-                      );
-                    })}
+                              }`}
+                          >
+                            {preset}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <input
+                      type="number"
+                      aria-label="Custom split count"
+                      min={1}
+                      max={10}
+                      step={1}
+                      value={split}
+                      onChange={(e) => {
+                        const nextValue = parseInt(e.target.value, 10);
+                        handleSplitChange(Number.isNaN(nextValue) ? 1 : nextValue);
+                      }}
+                      className="h-6 w-10 shrink-0 rounded-lg border border-border/50 bg-background px-1.5 text-center text-[11px] text-foreground outline-none [appearance:textfield] [-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                    />
                   </div>
-                  <input
-                    type="number"
-                    aria-label="Custom split count"
-                    min={1}
-                    max={10}
-                    step={1}
-                    value={split}
-                    onChange={(e) => {
-                      const nextValue = parseInt(e.target.value, 10);
-                      handleSplitChange(Number.isNaN(nextValue) ? 1 : nextValue);
-                    }}
-                    className="h-6 w-10 shrink-0 rounded-lg border border-border/50 bg-background px-1.5 text-center text-[11px] text-foreground outline-none [appearance:textfield] [-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                  />
                 </div>
               </div>
             </div>
+          </div>
+
+          <div className="mx-3 mt-2 flex items-center justify-between gap-3 rounded-xl bg-secondary/30 px-4 py-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                <span>Gasless sponsor</span>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      className="rounded-full p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+                      aria-label="What does gasless sponsor mean?"
+                    >
+                      <CircleHelp className="h-3.5 w-3.5" />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="start"
+                    className="w-72 rounded-xl border-border/60 bg-[var(--surface-inner)] p-3"
+                  >
+                    <div className="text-sm font-semibold text-foreground">
+                      No more &quot;insufficient SOL&quot;
+                    </div>
+                    <div className="mt-2 text-xs leading-5 text-muted-foreground">
+                      Use this if you do not have enough SOL, or if you just want a sponsor to cover the network fees for you.
+                    </div>
+                    <div className="mt-2 text-xs leading-5 text-muted-foreground">
+                      A sponsor wallet pays the SOL needed to submit this payment.
+                    </div>
+                    <div className="mt-2 text-xs leading-5 text-muted-foreground">
+                      The payment still charges token fees in the token you are sending, such as USDC.
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                {walletSolLamports === 0 && isGasless
+                  ? "Enabled automatically because your wallet has no SOL."
+                  : walletSolLamports === 0
+                    ? "Your wallet has no SOL. Turn this on if you want a sponsor to cover the network fees."
+                  : "Sponsor pays SOL. The transfer still charges token fees."}
+              </div>
+            </div>
+            <Switch
+              checked={isGasless}
+              onCheckedChange={handleGaslessChange}
+              aria-label="Enable gasless transfer"
+            />
           </div>
 
           {/* Your address */}
