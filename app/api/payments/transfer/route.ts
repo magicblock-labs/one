@@ -110,7 +110,7 @@ export async function POST(request: NextRequest) {
         initIfMissing: true,
         initAtasIfMissing: true,
         initVaultIfMissing: false,
-        ...(visibility === "private" && gasless === true ? { gasless: true } : {}),
+        ...(gasless === true ? { gasless: true } : {}),
         ...(memo ? { memo } : {}),
         ...(visibility === "private" && minDelayMs !== undefined
           ? { minDelayMs }
