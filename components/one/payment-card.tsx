@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   Loader2,
   ExternalLink,
@@ -254,7 +254,7 @@ export function PaymentCard() {
   const initialSplit = isInitiallyPrivate
     ? clampSplit(parseIntegerParam(searchParams.get("split"), 1, 1, 10))
     : 1;
-  const initialGasless = isInitiallyPrivate && searchParams.get("gasless") === "1";
+  const initialGasless = searchParams.get("gasless") === "1";
   const { connection } = useConnection();
   const { connected, openConnectModal, publicKey, signTransaction } =
     useUnifiedWallet();
@@ -276,6 +276,7 @@ export function PaymentCard() {
   const [isResolvingRecipient, setIsResolvingRecipient] = useState(false);
   const [walletTokenBalance, setWalletTokenBalance] = useState<string | null>(null);
   const [isWalletTokenBalanceLoading, setIsWalletTokenBalanceLoading] = useState(false);
+  const [walletSolLamports, setWalletSolLamports] = useState<number | null>(null);
   const [recipientTokenBalance, setRecipientTokenBalance] = useState<string | null>(null);
   const [isRecipientTokenBalanceLoading, setIsRecipientTokenBalanceLoading] = useState(false);
   const [isMintInitialized, setIsMintInitialized] = useState<boolean | null>(null);
@@ -287,6 +288,7 @@ export function PaymentCard() {
   const [txSignature, setTxSignature] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const gaslessAutoOptOutRef = useRef(false);
 
   const { tokens } = useAggregatorTokens();
 
@@ -427,6 +429,59 @@ export function PaymentCard() {
       cancelled = true;
     };
   }, [connection, directReceiverAddress]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!connected || !publicKey) {
+      setWalletSolLamports(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const refreshWalletSolBalance = async () => {
+      try {
+        const lamports = await connection.getBalance(publicKey, "confirmed");
+        if (cancelled) return;
+        setWalletSolLamports(lamports);
+      } catch {
+        if (cancelled) return;
+        setWalletSolLamports(null);
+      }
+    };
+
+    void refreshWalletSolBalance();
+
+    const subscriptionId = connection.onAccountChange(
+      publicKey,
+      (accountInfo) => {
+        if (cancelled) return;
+        setWalletSolLamports(accountInfo.lamports);
+      },
+      "confirmed"
+    );
+
+    return () => {
+      cancelled = true;
+      void connection.removeAccountChangeListener(subscriptionId);
+    };
+  }, [connection, connected, publicKey]);
+
+  useEffect(() => {
+    if (walletSolLamports === null || walletSolLamports > 0) {
+      gaslessAutoOptOutRef.current = false;
+      return;
+    }
+
+    if (walletSolLamports === 0 && !isGasless && !gaslessAutoOptOutRef.current) {
+      setIsGasless(true);
+    }
+  }, [walletSolLamports, isGasless]);
+
+  useEffect(() => {
+    gaslessAutoOptOutRef.current = false;
+  }, [publicKey?.toBase58()]);
 
   useEffect(() => {
     let cancelled = false;
@@ -598,7 +653,7 @@ export function PaymentCard() {
     const nextMinDelayMs = shouldPersistRoutingParams ? String(minDelayMs) : "";
     const nextMaxDelayMs = shouldPersistRoutingParams ? String(maxDelayMs) : "";
     const nextSplit = shouldPersistRoutingParams ? String(split) : "";
-    const nextGasless = isPrivate && isGasless ? "1" : "";
+    const nextGasless = isGasless ? "1" : "";
     const hasForeignParams =
       SWAP_QUERY_PARAMS.some((key) => params.has(key)) ||
       REQUEST_QUERY_PARAMS.some((key) => params.has(key));
@@ -656,7 +711,7 @@ export function PaymentCard() {
       params.delete("split");
     }
 
-    if (isPrivate && isGasless) {
+    if (isGasless) {
       params.set("gasless", "1");
     } else {
       params.delete("gasless");
@@ -717,9 +772,10 @@ export function PaymentCard() {
   const handleGaslessChange = useCallback(
     (checked: boolean) => {
       resetResultState();
+      gaslessAutoOptOutRef.current = walletSolLamports === 0 && !checked;
       setIsGasless(checked);
     },
-    [resetResultState]
+    [resetResultState, walletSolLamports]
   );
 
   const signAndSendUnsignedTransaction = useCallback(
@@ -829,7 +885,7 @@ export function PaymentCard() {
           mint: tokenMint,
           amount: rawAmount,
           visibility: isPrivate ? "private" : "public",
-          ...(isPrivate && isGasless ? { gasless: true } : {}),
+          ...(isGasless ? { gasless: true } : {}),
           ...(memo ? { memo } : {}),
           ...(isPrivate
             ? {
@@ -1135,52 +1191,57 @@ export function PaymentCard() {
                       className="h-6 w-10 shrink-0 rounded-lg border border-border/50 bg-background px-1.5 text-center text-[11px] text-foreground outline-none [appearance:textfield] [-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                     />
                   </div>
-                  <div className="mt-2 flex items-center justify-between gap-3 rounded-lg bg-secondary/30 px-3 py-2">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-                        <span>Gasless sponsor</span>
-                        <Popover>
-                          <PopoverTrigger asChild>
-                            <button
-                              type="button"
-                              className="rounded-full p-0.5 text-muted-foreground transition-colors hover:text-foreground"
-                              aria-label="What does gasless sponsor mean?"
-                            >
-                              <CircleHelp className="h-3.5 w-3.5" />
-                            </button>
-                          </PopoverTrigger>
-                          <PopoverContent
-                            align="start"
-                            className="w-72 rounded-xl border-border/60 bg-[var(--surface-inner)] p-3"
-                          >
-                            <div className="text-sm font-semibold text-foreground">
-                              No more &quot;insufficient SOL&quot;
-                            </div>
-                            <div className="mt-2 text-xs leading-5 text-muted-foreground">
-                              Use this if you do not have enough SOL, or if you just want a sponsor to cover the network fees for you.
-                            </div>
-                            <div className="mt-2 text-xs leading-5 text-muted-foreground">
-                              A sponsor wallet pays the SOL needed to submit the private payment.
-                            </div>
-                            <div className="mt-2 text-xs leading-5 text-muted-foreground">
-                              The payment still charges the normal private-transfer fee in the token you are sending, such as USDC.
-                            </div>
-                          </PopoverContent>
-                        </Popover>
-                      </div>
-                      <div className="text-[11px] text-muted-foreground">
-                        Sponsor pays SOL. The transfer still charges token fees.
-                      </div>
-                    </div>
-                    <Switch
-                      checked={isGasless}
-                      onCheckedChange={handleGaslessChange}
-                      aria-label="Enable gasless private transfer"
-                    />
-                  </div>
                 </div>
               </div>
             </div>
+          </div>
+
+          <div className="mx-3 mt-2 flex items-center justify-between gap-3 rounded-xl bg-secondary/30 px-4 py-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                <span>Gasless sponsor</span>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      className="rounded-full p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+                      aria-label="What does gasless sponsor mean?"
+                    >
+                      <CircleHelp className="h-3.5 w-3.5" />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="start"
+                    className="w-72 rounded-xl border-border/60 bg-[var(--surface-inner)] p-3"
+                  >
+                    <div className="text-sm font-semibold text-foreground">
+                      No more &quot;insufficient SOL&quot;
+                    </div>
+                    <div className="mt-2 text-xs leading-5 text-muted-foreground">
+                      Use this if you do not have enough SOL, or if you just want a sponsor to cover the network fees for you.
+                    </div>
+                    <div className="mt-2 text-xs leading-5 text-muted-foreground">
+                      A sponsor wallet pays the SOL needed to submit this payment.
+                    </div>
+                    <div className="mt-2 text-xs leading-5 text-muted-foreground">
+                      The payment still charges token fees in the token you are sending, such as USDC.
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                {walletSolLamports === 0 && isGasless
+                  ? "Enabled automatically because your wallet has no SOL."
+                  : walletSolLamports === 0
+                    ? "Your wallet has no SOL. Turn this on if you want a sponsor to cover the network fees."
+                  : "Sponsor pays SOL. The transfer still charges token fees."}
+              </div>
+            </div>
+            <Switch
+              checked={isGasless}
+              onCheckedChange={handleGaslessChange}
+              aria-label="Enable gasless transfer"
+            />
           </div>
 
           {/* Your address */}
