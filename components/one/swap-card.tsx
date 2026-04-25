@@ -84,6 +84,10 @@ function getInitialAmount(amount: string | undefined) {
   return amount && /^\d*\.?\d*$/.test(amount) ? amount : "";
 }
 
+function getFallbackTokenByMint(mint: string) {
+  return findTokenByMint(mint, FALLBACK_TOKENS) ?? FALLBACK_TOKENS[0];
+}
+
 function parseIntegerParam(
   value: string | null,
   fallback: number,
@@ -307,11 +311,11 @@ export function SwapCard({
   const { tokens, isLoading: tokensLoading } = useAggregatorTokens();
 
   const sellToken = useMemo(
-    () => findTokenByMint(sellMint, tokens) ?? FALLBACK_TOKENS[1],
+    () => findTokenByMint(sellMint, tokens) ?? getFallbackTokenByMint(sellMint),
     [sellMint, tokens]
   );
   const buyToken = useMemo(
-    () => findTokenByMint(buyMint, tokens) ?? FALLBACK_TOKENS[0],
+    () => findTokenByMint(buyMint, tokens) ?? getFallbackTokenByMint(buyMint),
     [buyMint, tokens]
   );
 
