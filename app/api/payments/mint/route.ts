@@ -6,30 +6,12 @@ import {
   getPaymentsApiUrl,
   getPaymentsTimeoutSignal,
 } from "@/lib/payments";
+import { getPaymentsErrorMessage } from "@/lib/payments-errors";
 
 interface InitializeMintRequest {
   payer?: string;
   mint?: string;
   validator?: string;
-}
-
-function getPaymentsErrorMessage(responseBody: unknown, status: number) {
-  if (responseBody && typeof responseBody === "object") {
-    const maybeError = "error" in responseBody ? responseBody.error : undefined;
-    if (maybeError && typeof maybeError === "object" && "message" in maybeError) {
-      const message = maybeError.message;
-      if (typeof message === "string" && message.trim()) {
-        return message;
-      }
-    }
-
-    const maybeMessage = "message" in responseBody ? responseBody.message : undefined;
-    if (typeof maybeMessage === "string" && maybeMessage.trim()) {
-      return maybeMessage;
-    }
-  }
-
-  return `Payments API error: ${status}`;
 }
 
 export async function GET(request: NextRequest) {
@@ -75,7 +57,7 @@ export async function GET(request: NextRequest) {
     if (!upstreamRes.ok) {
       return NextResponse.json(
         {
-          error: getPaymentsErrorMessage(responseBody, upstreamRes.status),
+          error: getPaymentsErrorMessage(upstreamRes.status, responseBody),
           details: responseBody,
         },
         { status: upstreamRes.status }
@@ -143,7 +125,7 @@ export async function POST(request: NextRequest) {
     if (!upstreamRes.ok) {
       return NextResponse.json(
         {
-          error: getPaymentsErrorMessage(responseBody, upstreamRes.status),
+          error: getPaymentsErrorMessage(upstreamRes.status, responseBody),
           details: responseBody,
         },
         { status: upstreamRes.status }

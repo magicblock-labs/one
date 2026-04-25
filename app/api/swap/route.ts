@@ -5,6 +5,7 @@ import {
   getPaymentsApiUrl,
   getPaymentsTimeoutSignal,
 } from "@/lib/payments";
+import { getPaymentsErrorMessage } from "@/lib/payments-errors";
 
 interface SwapBuildRequest {
   quoteResponse?: unknown;
@@ -140,19 +141,12 @@ export async function POST(request: NextRequest) {
 
     if (!res.ok) {
       const responseBody = await res.json().catch(() => null);
-      const errorMessage =
-        responseBody &&
-        typeof responseBody === "object" &&
-        "error" in responseBody &&
-        responseBody.error &&
-        typeof responseBody.error === "object" &&
-        "message" in responseBody.error &&
-        typeof responseBody.error.message === "string"
-          ? responseBody.error.message
-          : `Payments API error: ${res.status}`;
 
       return NextResponse.json(
-        { error: errorMessage, details: responseBody },
+        {
+          error: getPaymentsErrorMessage(res.status, responseBody),
+          details: responseBody,
+        },
         { status: res.status }
       );
     }
