@@ -30,8 +30,6 @@ export const SOLANA_SERVER_RPC_ENDPOINT =
   configuredServerRpcEndpoint || DEFAULT_SOLANA_RPC_ENDPOINT;
 
 export const AGGREGATOR_ENDPOINTS = {
-  swapQuote: "/swap/v1/quote",
-  swap: "/swap/v1/swap",
   price: "/price/v3",
   tokensTag: "/tokens/v2/tag",
   tokensStrictListCdn: "https://cdn.jup.ag/token-list/strict.json",

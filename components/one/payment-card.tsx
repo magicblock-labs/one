@@ -5,7 +5,6 @@ import {
   Loader2,
   ExternalLink,
   Check,
-  Shield,
   ShieldCheck,
   User,
   Copy,
@@ -30,7 +29,12 @@ import {
 import { usePrices } from "@/hooks/use-sol-price";
 import { useAggregatorTokens } from "@/hooks/use-aggregator-tokens";
 import { PAYMENTS_DEFAULT_USDC_MINT } from "@/lib/payments";
-import { Slider } from "@/components/ui/slider";
+import {
+  MAX_PRIVATE_DELAY_MS,
+  clampPrivateSplit,
+  formatPrivateRoutingSummary,
+} from "@/lib/private-routing";
+import { PrivateRoutingControls } from "./private-routing-controls";
 import { TokenSelectModal } from "./token-select-modal";
 import { useUnifiedWallet } from "@/app/wallet/solana-wallet-provider";
 
@@ -142,10 +146,6 @@ function parseIntegerParam(
   return Math.min(max, Math.max(min, parsed));
 }
 
-function clampSplit(value: number) {
-  return Math.min(10, Math.max(1, value));
-}
-
 function getRecipientAddress(value: string) {
   if (!value) return null;
 
@@ -201,33 +201,10 @@ async function fetchFormattedTokenBalance(
   return formatTokenBalance(uiAmount);
 }
 
-const MAX_PRIVATE_DELAY_MS = 5 * 60 * 1000;
 const TOKEN_PROGRAM_IDS = [
   new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
   new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
 ];
-
-function formatDelayValue(delayMs: number) {
-  if (delayMs >= 60_000) {
-    const minutes = delayMs / 60_000;
-    const roundedMinutes = Number.isInteger(minutes)
-      ? minutes.toString()
-      : minutes.toFixed(1).replace(/\.0$/, "");
-
-    return `${roundedMinutes} min`;
-  }
-
-  if (delayMs >= 1_000) {
-    const seconds = delayMs / 1_000;
-    const roundedSeconds = Number.isInteger(seconds)
-      ? seconds.toString()
-      : seconds.toFixed(1).replace(/\.0$/, "");
-
-    return `${roundedSeconds} sec`;
-  }
-
-  return `${delayMs} ms`;
-}
 
 export function PaymentCard() {
   const pathname = usePathname();
@@ -245,7 +222,7 @@ export function PaymentCard() {
       )
     : 0;
   const initialSplit = isInitiallyPrivate
-    ? clampSplit(parseIntegerParam(searchParams.get("split"), 1, 1, 10))
+    ? clampPrivateSplit(parseIntegerParam(searchParams.get("split"), 1, 1, 10))
     : 1;
   const { connection } = useConnection();
   const { connected, openConnectModal, publicKey, signTransaction } =
@@ -320,18 +297,7 @@ export function PaymentCard() {
   }, [resolvedReceiver]);
 
   const routingSummary = useMemo(() => {
-    const splitLabel = split === 1 ? "1 split" : `${split} splits`;
-    if (minDelayMs === 0 && maxDelayMs === 0) {
-      return split === 1
-        ? "Immediate transfer"
-        : `${splitLabel}. Immediate transfer`;
-    }
-
-    if (minDelayMs === maxDelayMs) {
-      return `${splitLabel} scheduled at ${formatDelayValue(minDelayMs)}`;
-    }
-
-    return `${splitLabel} across ${formatDelayValue(minDelayMs)}-${formatDelayValue(maxDelayMs)}`;
+    return formatPrivateRoutingSummary(split, minDelayMs, maxDelayMs);
   }, [split, minDelayMs, maxDelayMs]);
 
   const resetResultState = useCallback(() => {
@@ -690,7 +656,7 @@ export function PaymentCard() {
   const handleSplitChange = useCallback(
     (nextSplit: number) => {
       resetResultState();
-      setSplit(clampSplit(nextSplit));
+      setSplit(clampPrivateSplit(nextSplit));
     },
     [resetResultState]
   );
@@ -1004,111 +970,22 @@ export function PaymentCard() {
 
           {/* Private Transfer Toggle */}
           <div className="mx-3 mt-2">
-            <div className="rounded-xl border border-border/30 bg-[var(--surface-inner)] transition-colors group hover:border-border/60">
-              <label
-                htmlFor="private-toggle"
-                className="flex w-full cursor-pointer items-center justify-between gap-3 px-4 py-3 select-none"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  {isPrivate ? (
-                    <ShieldCheck className="w-5 h-5 shrink-0 text-primary" />
-                  ) : (
-                    <Shield className="w-5 h-5 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
-                  )}
-                  <div className="min-w-0 text-left">
-                    <div className="text-sm font-medium text-foreground">
-                      Private transfer
-                    </div>
-                    <div className="truncate text-xs text-muted-foreground">
-                      {isPrivate
-                        ? routingSummary
-                        : "Enable MagicBlock private transactions"}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Material Design 3 Toggle Switch */}
-                <div className="relative shrink-0">
-                  <input
-                    id="private-toggle"
-                    type="checkbox"
-                    checked={isPrivate}
-                    onChange={() => setIsPrivate(!isPrivate)}
-                    className="sr-only peer"
-                  />
-                  <div
-                    className={[
-                      "w-[52px] h-8 rounded-full border-2 transition-all duration-200",
-                      isPrivate
-                        ? "bg-primary border-primary"
-                        : "bg-transparent border-muted-foreground/50",
-                    ].join(" ")}
-                  />
-                  <div
-                    className={[
-                      "absolute rounded-full shadow-md transition-all duration-200 ease-in-out",
-                      isPrivate
-                        ? "top-1 left-[24px] w-6 h-6 bg-primary-foreground"
-                        : "top-[6px] left-[6px] w-5 h-5 bg-muted-foreground",
-                    ].join(" ")}
-                  />
-                  {isPrivate && (
-                    <Check className="absolute top-1 left-[24px] w-6 h-6 p-1 text-primary pointer-events-none" />
-                  )}
-                </div>
-              </label>
-
-              <div
-                className={`overflow-hidden transition-all duration-300 ease-in-out ${
-                  isPrivate ? "max-h-24 opacity-100" : "max-h-0 opacity-0"
-                }`}
-              >
-                <div className="flex items-center gap-2 border-t border-border/20 px-4 pb-2.5 pt-2">
-                  <div className="min-w-0 flex-1 px-1">
-                    <Slider
-                      aria-label="Private delay range"
-                      value={[minDelayMs, maxDelayMs]}
-                      min={0}
-                      max={MAX_PRIVATE_DELAY_MS}
-                      step={1000}
-                      onValueChange={handleDelayRangeChange}
-                    />
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    {[1, 2, 4].map((preset) => {
-                      const isActive = split === preset;
-                      return (
-                        <button
-                          key={preset}
-                          type="button"
-                          onClick={() => handleSplitChange(preset)}
-                          className={`h-6 min-w-6 rounded-full px-1.5 text-[11px] font-medium transition-colors cursor-pointer ${
-                            isActive
-                              ? "bg-primary text-primary-foreground"
-                              : "bg-secondary text-muted-foreground hover:text-foreground"
-                          }`}
-                        >
-                          {preset}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <input
-                    type="number"
-                    aria-label="Custom split count"
-                    min={1}
-                    max={10}
-                    step={1}
-                    value={split}
-                    onChange={(e) => {
-                      const nextValue = parseInt(e.target.value, 10);
-                      handleSplitChange(Number.isNaN(nextValue) ? 1 : nextValue);
-                    }}
-                    className="h-6 w-10 shrink-0 rounded-lg border border-border/50 bg-background px-1.5 text-center text-[11px] text-foreground outline-none [appearance:textfield] [-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                  />
-                </div>
-              </div>
-            </div>
+            <PrivateRoutingControls
+              id="private-transfer-toggle"
+              label="Private transfer"
+              enabled={isPrivate}
+              onEnabledChange={(enabled) => {
+                setIsPrivate(enabled);
+                resetResultState();
+              }}
+              summary={routingSummary}
+              disabledDescription="Enable MagicBlock private transactions"
+              minDelayMs={minDelayMs}
+              maxDelayMs={maxDelayMs}
+              onDelayRangeChange={handleDelayRangeChange}
+              split={split}
+              onSplitChange={handleSplitChange}
+            />
           </div>
 
           {/* Your address */}

@@ -13,7 +13,16 @@ const topTabs = [
   { id: "swap", label: "Swap", icon: ArrowLeftRight },
 ] as const;
 
-const SWAP_QUERY_PARAMS = ["buy", "sell", "amt"] as const;
+const SWAP_QUERY_PARAMS = [
+  "buy",
+  "sell",
+  "amt",
+  "sprivate",
+  "dst",
+  "smin",
+  "smax",
+  "ssplit",
+] as const;
 const PAYMENT_QUERY_PARAMS = [
   "rcv",
   "mint",
@@ -59,7 +68,12 @@ export function TradeHub({
   const hasSwapSelection = Boolean(
     searchParams.get("buy") ||
       searchParams.get("sell") ||
-      searchParams.get("amt")
+      searchParams.get("amt") ||
+      searchParams.has("sprivate") ||
+      searchParams.get("dst") ||
+      searchParams.get("smin") ||
+      searchParams.get("smax") ||
+      searchParams.get("ssplit")
   );
   const [activeTop, setActiveTop] = useState<TopTab>(
     urlTab === "swap" || urlTab === "payment" || urlTab === "request"

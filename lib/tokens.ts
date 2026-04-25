@@ -20,8 +20,8 @@ export const SOL_MINT = "So11111111111111111111111111111111111111112";
 export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 export const USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
 
-export const DEFAULT_SELL_MINT = USDC_MINT;
-export const DEFAULT_BUY_MINT = SOL_MINT;
+export const DEFAULT_SELL_MINT = SOL_MINT;
+export const DEFAULT_BUY_MINT = USDC_MINT;
 
 export const POPULAR_SYMBOLS = ["SOL", "USDC", "USDT", "ETH", "BTC"];
 

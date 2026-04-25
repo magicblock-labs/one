@@ -50,6 +50,12 @@ interface UseSwapOptions {
   inputDecimals: number;
   outputDecimals: number;
   slippageBps?: number;
+  visibility?: "public" | "private";
+  destination?: string | null;
+  destinationPending?: boolean;
+  minDelayMs?: number;
+  maxDelayMs?: number;
+  split?: number;
   /** Whether to auto-quote when inputs change */
   enabled?: boolean;
 }
@@ -72,6 +78,12 @@ export function useSwap({
   inputDecimals,
   outputDecimals,
   slippageBps = 50,
+  visibility = "public",
+  destination = null,
+  destinationPending = false,
+  minDelayMs = 0,
+  maxDelayMs = 0,
+  split = 1,
   enabled = true,
 }: UseSwapOptions) {
   const { connection } = useConnection();
@@ -167,18 +179,42 @@ export function useSwap({
       return;
     }
 
+    if (visibility === "private") {
+      if (destinationPending) {
+        setError("Destination is still resolving");
+        setStatus("error");
+        return;
+      }
+
+      if (!destination) {
+        setError("Enter a valid destination");
+        setStatus("error");
+        return;
+      }
+    }
+
     try {
       // Step 1: Build the swap transaction
       setStatus("building");
       setError(null);
 
+      const requestBody: Record<string, unknown> = {
+        quoteResponse: quote,
+        userPublicKey: publicKey.toBase58(),
+      };
+
+      if (visibility === "private") {
+        requestBody.visibility = "private";
+        requestBody.destination = destination;
+        requestBody.minDelayMs = String(minDelayMs);
+        requestBody.maxDelayMs = String(maxDelayMs);
+        requestBody.split = split;
+      }
+
       const buildRes = await fetch("/api/swap", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          quoteResponse: quote,
-          userPublicKey: publicKey.toBase58(),
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       if (!buildRes.ok) {
@@ -221,8 +257,7 @@ export function useSwap({
       setStatus("confirmed");
     } catch (err: unknown) {
       console.error("Swap execution error:", err);
-      const message =
-        err instanceof Error ? err.message : "Swap failed";
+      const message = err instanceof Error ? err.message : "Swap failed";
       // Don't overwrite "confirmed" status if user rejected in wallet
       if (message.includes("User rejected")) {
         setError("Transaction rejected by user");
@@ -231,7 +266,19 @@ export function useSwap({
       }
       setStatus("error");
     }
-  }, [quote, publicKey, sendTransaction, connected, connection]);
+  }, [
+    quote,
+    publicKey,
+    sendTransaction,
+    connected,
+    connection,
+    visibility,
+    destinationPending,
+    destination,
+    minDelayMs,
+    maxDelayMs,
+    split,
+  ]);
 
   const reset = useCallback(() => {
     setStatus("idle");
