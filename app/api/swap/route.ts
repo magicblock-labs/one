@@ -1,23 +1,39 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PublicKey } from "@solana/web3.js";
 import {
-  AGGREGATOR_ENDPOINTS,
-  getAggregatorHeaders,
-  getAggregatorTimeoutSignal,
-  getAggregatorUrl,
-} from "@/lib/aggregator";
+  PAYMENTS_ENDPOINTS,
+  getPaymentsApiUrl,
+  getPaymentsTimeoutSignal,
+} from "@/lib/payments";
+
+interface SwapBuildRequest {
+  quoteResponse?: unknown;
+  userPublicKey?: string;
+  visibility?: "public" | "private";
+  destination?: string;
+  minDelayMs?: string;
+  maxDelayMs?: string;
+  split?: number;
+}
 
 /**
- * Proxy to an aggregator-compatible swap API – build a swap transaction
- * https://dev.jup.ag/docs/swap-api/build-swap-transaction
+ * Proxy to the payments swap API to build a swap transaction.
  *
  * POST body: { quoteResponse, userPublicKey, dynamicComputeUnitLimit?, prioritizationFeeLamports? }
- * Returns: { swapTransaction (base64), lastValidBlockHeight, prioritizationFeeLamports, dynamicSlippageReport? }
+ * Returns: { swapTransaction (base64), lastValidBlockHeight?, prioritizationFeeLamports?, privateTransfer? }
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { quoteResponse, userPublicKey } = body;
+    const body = (await request.json()) as SwapBuildRequest;
+    const {
+      quoteResponse,
+      userPublicKey,
+      visibility = "public",
+      destination,
+      minDelayMs,
+      maxDelayMs,
+      split,
+    } = body;
 
     if (!quoteResponse || typeof userPublicKey !== "string") {
       return NextResponse.json(
@@ -35,30 +51,98 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const res = await fetch(getAggregatorUrl(AGGREGATOR_ENDPOINTS.swap), {
-      method: "POST",
-      headers: getAggregatorHeaders("application/json"),
-      body: JSON.stringify({
-        quoteResponse,
-        userPublicKey,
-        dynamicComputeUnitLimit: true,
-        prioritizationFeeLamports: {
-          priorityLevelWithMaxLamports: {
-            maxLamports: 1_000_000,
-            global: false,
-            priorityLevel: "high",
+    if (visibility !== "public" && visibility !== "private") {
+      return NextResponse.json(
+        { error: "Invalid visibility" },
+        { status: 400 }
+      );
+    }
+
+    if (visibility === "private") {
+      const hasValidSplit =
+        typeof split === "number" &&
+        Number.isInteger(split) &&
+        split >= 1 &&
+        split <= 10;
+
+      if (
+        typeof destination !== "string" ||
+        typeof minDelayMs !== "string" ||
+        !/^\d+$/.test(minDelayMs) ||
+        typeof maxDelayMs !== "string" ||
+        !/^\d+$/.test(maxDelayMs) ||
+        !hasValidSplit
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Private swaps require destination, minDelayMs, maxDelayMs, and split",
           },
+          { status: 400 }
+        );
+      }
+
+      try {
+        new PublicKey(destination);
+      } catch {
+        return NextResponse.json(
+          { error: "Invalid destination" },
+          { status: 400 }
+        );
+      }
+
+      if (BigInt(maxDelayMs) < BigInt(minDelayMs)) {
+        return NextResponse.json(
+          { error: "maxDelayMs must be greater than or equal to minDelayMs" },
+          { status: 400 }
+        );
+      }
+    }
+
+    const upstreamBody: Record<string, unknown> = {
+      quoteResponse,
+      userPublicKey,
+      dynamicComputeUnitLimit: true,
+      prioritizationFeeLamports: {
+        priorityLevelWithMaxLamports: {
+          maxLamports: 1_000_000,
+          global: false,
+          priorityLevel: "high",
         },
-      }),
-      signal: getAggregatorTimeoutSignal(),
+      },
+    };
+
+    if (visibility === "private") {
+      upstreamBody.visibility = "private";
+      upstreamBody.destination = destination;
+      upstreamBody.minDelayMs = minDelayMs;
+      upstreamBody.maxDelayMs = maxDelayMs;
+      upstreamBody.split = typeof split === "number" ? split : 1;
+    }
+
+    const res = await fetch(getPaymentsApiUrl(PAYMENTS_ENDPOINTS.swap), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(upstreamBody),
+      signal: getPaymentsTimeoutSignal(),
       cache: "no-store",
     });
 
     if (!res.ok) {
-      const errorText = await res.text();
-      console.error("Aggregator swap build error:", res.status, errorText);
+      const responseBody = await res.json().catch(() => null);
+      const errorMessage =
+        responseBody &&
+        typeof responseBody === "object" &&
+        "error" in responseBody &&
+        responseBody.error &&
+        typeof responseBody.error === "object" &&
+        "message" in responseBody.error &&
+        typeof responseBody.error.message === "string"
+          ? responseBody.error.message
+          : `Payments API error: ${res.status}`;
+
       return NextResponse.json(
-        { error: `Aggregator swap error: ${res.status}`, details: errorText },
+        { error: errorMessage, details: responseBody },
         { status: res.status }
       );
     }

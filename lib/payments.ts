@@ -54,6 +54,8 @@ export const PAYMENTS_ENDPOINTS = {
   initializeMint: "/v1/spl/initialize-mint",
   isMintInitialized: "/v1/spl/is-mint-initialized",
   splTransfer: "/v1/spl/transfer",
+  swapQuote: "/v1/swap/quote",
+  swap: "/v1/swap/swap",
 } as const;
 
 export function getPaymentsApiUrl(path: string) {
