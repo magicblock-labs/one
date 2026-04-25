@@ -19,7 +19,17 @@ interface SwapBuildRequest {
 /**
  * Proxy to the payments swap API to build a swap transaction.
  *
- * POST body: { quoteResponse, userPublicKey, dynamicComputeUnitLimit?, prioritizationFeeLamports? }
+ * POST body: {
+ *   quoteResponse,
+ *   userPublicKey,
+ *   dynamicComputeUnitLimit?,
+ *   prioritizationFeeLamports?,
+ *   visibility?: "public" | "private",
+ *   destination?: string,
+ *   minDelayMs?: string,
+ *   maxDelayMs?: string,
+ *   split?: number
+ * }
  * Returns: { swapTransaction (base64), lastValidBlockHeight?, prioritizationFeeLamports?, privateTransfer? }
  */
 export async function POST(request: NextRequest) {

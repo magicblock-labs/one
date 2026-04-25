@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Shield, ShieldCheck } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
@@ -37,6 +37,30 @@ export function PrivateRoutingControls({
   compact = false,
   children,
 }: PrivateRoutingControlsProps) {
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const [contentHeight, setContentHeight] = useState(0);
+
+  useEffect(() => {
+    const contentNode = contentRef.current;
+    if (!contentNode) return;
+
+    const updateContentHeight = () => {
+      setContentHeight(contentNode.scrollHeight);
+    };
+
+    updateContentHeight();
+
+    const resizeObserver = new ResizeObserver(() => {
+      updateContentHeight();
+    });
+
+    resizeObserver.observe(contentNode);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [children, compact]);
+
   return (
     <div className="rounded-xl border border-border/30 bg-[var(--surface-inner)] transition-colors group hover:border-border/60">
       <label
@@ -108,70 +132,73 @@ export function PrivateRoutingControls({
       <div
         className={cn(
           "overflow-hidden transition-all duration-300 ease-in-out",
-          enabled ? "max-h-80 opacity-100" : "max-h-0 opacity-0"
+          enabled ? "opacity-100" : "opacity-0"
         )}
+        style={{ maxHeight: enabled ? `${contentHeight}px` : "0px" }}
       >
-        {children && (
+        <div ref={contentRef}>
+          {children && (
+            <div
+              className={cn(
+                "border-t border-border/20 px-4",
+                compact ? "py-2.5" : "py-3"
+              )}
+            >
+              {children}
+            </div>
+          )}
+
           <div
             className={cn(
-              "border-t border-border/20 px-4",
-              compact ? "py-2.5" : "py-3"
+              "flex items-center border-t border-border/20 px-4",
+              compact ? "gap-1.5 pb-2 pt-1.5" : "gap-2 pb-2.5 pt-2"
             )}
           >
-            {children}
-          </div>
-        )}
+            <div className="min-w-0 flex-1 px-1">
+              <Slider
+                aria-label={`${label} delay range`}
+                value={[minDelayMs, maxDelayMs]}
+                min={0}
+                max={MAX_PRIVATE_DELAY_MS}
+                step={1000}
+                onValueChange={onDelayRangeChange}
+              />
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              {[1, 2, 4].map((preset) => {
+                const isActive = split === preset;
 
-        <div
-          className={cn(
-            "flex items-center border-t border-border/20 px-4",
-            compact ? "gap-1.5 pb-2 pt-1.5" : "gap-2 pb-2.5 pt-2"
-          )}
-        >
-          <div className="min-w-0 flex-1 px-1">
-            <Slider
-              aria-label={`${label} delay range`}
-              value={[minDelayMs, maxDelayMs]}
-              min={0}
-              max={MAX_PRIVATE_DELAY_MS}
-              step={1000}
-              onValueChange={onDelayRangeChange}
+                return (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => onSplitChange(preset)}
+                    className={cn(
+                      "h-6 min-w-6 rounded-full px-1.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                      isActive
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-secondary text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    {preset}
+                  </button>
+                );
+              })}
+            </div>
+            <input
+              type="number"
+              aria-label="Custom split count"
+              min={1}
+              max={10}
+              step={1}
+              value={split}
+              onChange={(event) => {
+                const nextValue = Number.parseInt(event.target.value, 10);
+                onSplitChange(Number.isNaN(nextValue) ? 1 : nextValue);
+              }}
+              className="h-6 w-10 shrink-0 rounded-lg border border-border/50 bg-background px-1.5 text-center text-[11px] text-foreground outline-none transition-[color,box-shadow] [appearance:textfield] focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background [-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
             />
           </div>
-          <div className="flex shrink-0 items-center gap-1">
-            {[1, 2, 4].map((preset) => {
-              const isActive = split === preset;
-
-              return (
-                <button
-                  key={preset}
-                  type="button"
-                  onClick={() => onSplitChange(preset)}
-                  className={cn(
-                    "h-6 min-w-6 rounded-full px-1.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-                    isActive
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-secondary text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  {preset}
-                </button>
-              );
-            })}
-          </div>
-          <input
-            type="number"
-            aria-label="Custom split count"
-            min={1}
-            max={10}
-            step={1}
-            value={split}
-            onChange={(event) => {
-              const nextValue = Number.parseInt(event.target.value, 10);
-              onSplitChange(Number.isNaN(nextValue) ? 1 : nextValue);
-            }}
-            className="h-6 w-10 shrink-0 rounded-lg border border-border/50 bg-background px-1.5 text-center text-[11px] text-foreground outline-none transition-[color,box-shadow] [appearance:textfield] focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background [-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-          />
         </div>
       </div>
     </div>

@@ -541,11 +541,13 @@ export function SwapCard({
         if (cancelled) return;
         setRecipientTokenBalance(nextBalance);
       } catch {
-        if (cancelled) return;
-        setRecipientTokenBalance(null);
+        if (!cancelled) {
+          setRecipientTokenBalance(null);
+        }
       } finally {
-        if (cancelled) return;
-        setIsRecipientTokenBalanceLoading(false);
+        if (!cancelled) {
+          setIsRecipientTokenBalanceLoading(false);
+        }
       }
     };
 
