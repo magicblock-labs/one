@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   Loader2,
   ExternalLink,
   Check,
+  CircleHelp,
   Shield,
   ShieldCheck,
   User,
@@ -31,7 +32,19 @@ import { usePrices } from "@/hooks/use-sol-price";
 import { useAggregatorTokens } from "@/hooks/use-aggregator-tokens";
 import { dispatchPrivateBalanceRefresh } from "@/lib/private-balance-refresh";
 import { PAYMENTS_DEFAULT_USDC_MINT } from "@/lib/payments";
+import {
+  MAX_PRIVATE_DELAY_MS,
+  clampPrivateSplit,
+  formatPrivateRoutingSummary,
+} from "@/lib/private-routing";
+import { PrivateRoutingControls } from "./private-routing-controls";
 import { Slider } from "@/components/ui/slider";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
 import { TokenSelectModal } from "./token-select-modal";
 import { useUnifiedWallet } from "@/app/wallet/solana-wallet-provider";
 
@@ -143,10 +156,6 @@ function parseIntegerParam(
   return Math.min(max, Math.max(min, parsed));
 }
 
-function clampSplit(value: number) {
-  return Math.min(10, Math.max(1, value));
-}
-
 function getRecipientAddress(value: string) {
   if (!value) return null;
 
@@ -202,33 +211,10 @@ async function fetchFormattedTokenBalance(
   return formatTokenBalance(uiAmount);
 }
 
-const MAX_PRIVATE_DELAY_MS = 5 * 60 * 1000;
 const TOKEN_PROGRAM_IDS = [
   new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
   new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
 ];
-
-function formatDelayValue(delayMs: number) {
-  if (delayMs >= 60_000) {
-    const minutes = delayMs / 60_000;
-    const roundedMinutes = Number.isInteger(minutes)
-      ? minutes.toString()
-      : minutes.toFixed(1).replace(/\.0$/, "");
-
-    return `${roundedMinutes} min`;
-  }
-
-  if (delayMs >= 1_000) {
-    const seconds = delayMs / 1_000;
-    const roundedSeconds = Number.isInteger(seconds)
-      ? seconds.toString()
-      : seconds.toFixed(1).replace(/\.0$/, "");
-
-    return `${roundedSeconds} sec`;
-  }
-
-  return `${delayMs} ms`;
-}
 
 export function PaymentCard() {
   const pathname = usePathname();
@@ -241,13 +227,14 @@ export function PaymentCard() {
     : 0;
   const initialMaxDelayMs = isInitiallyPrivate
     ? Math.max(
-        initialMinDelayMs,
-        parseIntegerParam(searchParams.get("max"), 0, 0, MAX_PRIVATE_DELAY_MS)
-      )
+      initialMinDelayMs,
+      parseIntegerParam(searchParams.get("max"), 0, 0, MAX_PRIVATE_DELAY_MS)
+    )
     : 0;
   const initialSplit = isInitiallyPrivate
-    ? clampSplit(parseIntegerParam(searchParams.get("split"), 1, 1, 10))
+    ? clampPrivateSplit(parseIntegerParam(searchParams.get("split"), 1, 1, 10))
     : 1;
+  const initialGasless = searchParams.get("gasless") === "1";
   const { connection } = useConnection();
   const { connected, openConnectModal, publicKey, signTransaction } =
     useUnifiedWallet();
@@ -259,6 +246,7 @@ export function PaymentCard() {
   const [receiver, setReceiver] = useState(() => searchParams.get("rcv") ?? "");
   const [memo, setMemo] = useState(() => searchParams.get("memo") ?? "");
   const [isPrivate, setIsPrivate] = useState(() => isInitiallyPrivate);
+  const [isGasless, setIsGasless] = useState(() => initialGasless);
   const [minDelayMs, setMinDelayMs] = useState(() => initialMinDelayMs);
   const [maxDelayMs, setMaxDelayMs] = useState(() => initialMaxDelayMs);
   const [split, setSplit] = useState(() => initialSplit);
@@ -268,6 +256,7 @@ export function PaymentCard() {
   const [isResolvingRecipient, setIsResolvingRecipient] = useState(false);
   const [walletTokenBalance, setWalletTokenBalance] = useState<string | null>(null);
   const [isWalletTokenBalanceLoading, setIsWalletTokenBalanceLoading] = useState(false);
+  const [walletSolLamports, setWalletSolLamports] = useState<number | null>(null);
   const [recipientTokenBalance, setRecipientTokenBalance] = useState<string | null>(null);
   const [isRecipientTokenBalanceLoading, setIsRecipientTokenBalanceLoading] = useState(false);
   const [isMintInitialized, setIsMintInitialized] = useState<boolean | null>(null);
@@ -279,6 +268,7 @@ export function PaymentCard() {
   const [txSignature, setTxSignature] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const gaslessAutoOptOutRef = useRef(false);
 
   const { tokens } = useAggregatorTokens();
 
@@ -321,18 +311,7 @@ export function PaymentCard() {
   }, [resolvedReceiver]);
 
   const routingSummary = useMemo(() => {
-    const splitLabel = split === 1 ? "1 split" : `${split} splits`;
-    if (minDelayMs === 0 && maxDelayMs === 0) {
-      return split === 1
-        ? "Immediate transfer"
-        : `${splitLabel}. Immediate transfer`;
-    }
-
-    if (minDelayMs === maxDelayMs) {
-      return `${splitLabel} scheduled at ${formatDelayValue(minDelayMs)}`;
-    }
-
-    return `${splitLabel} across ${formatDelayValue(minDelayMs)}-${formatDelayValue(maxDelayMs)}`;
+    return formatPrivateRoutingSummary(split, minDelayMs, maxDelayMs);
   }, [split, minDelayMs, maxDelayMs]);
 
   const resetResultState = useCallback(() => {
@@ -419,6 +398,59 @@ export function PaymentCard() {
       cancelled = true;
     };
   }, [connection, directReceiverAddress]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!connected || !publicKey) {
+      setWalletSolLamports(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const refreshWalletSolBalance = async () => {
+      try {
+        const lamports = await connection.getBalance(publicKey, "confirmed");
+        if (cancelled) return;
+        setWalletSolLamports(lamports);
+      } catch {
+        if (cancelled) return;
+        setWalletSolLamports(null);
+      }
+    };
+
+    void refreshWalletSolBalance();
+
+    const subscriptionId = connection.onAccountChange(
+      publicKey,
+      (accountInfo) => {
+        if (cancelled) return;
+        setWalletSolLamports(accountInfo.lamports);
+      },
+      "confirmed"
+    );
+
+    return () => {
+      cancelled = true;
+      void connection.removeAccountChangeListener(subscriptionId);
+    };
+  }, [connection, connected, publicKey]);
+
+  useEffect(() => {
+    if (walletSolLamports === null || walletSolLamports > 0) {
+      gaslessAutoOptOutRef.current = false;
+      return;
+    }
+
+    if (walletSolLamports === 0 && !isGasless && !gaslessAutoOptOutRef.current) {
+      setIsGasless(true);
+    }
+  }, [walletSolLamports, isGasless]);
+
+  useEffect(() => {
+    gaslessAutoOptOutRef.current = false;
+  }, [publicKey?.toBase58()]);
 
   useEffect(() => {
     let cancelled = false;
@@ -585,10 +617,12 @@ export function PaymentCard() {
     const currentMinDelayMs = params.get("min") ?? "";
     const currentMaxDelayMs = params.get("max") ?? "";
     const currentSplit = params.get("split") ?? "";
+    const currentGasless = params.get("gasless") ?? "";
     const currentTab = params.get("tab") ?? "";
     const nextMinDelayMs = shouldPersistRoutingParams ? String(minDelayMs) : "";
     const nextMaxDelayMs = shouldPersistRoutingParams ? String(maxDelayMs) : "";
     const nextSplit = shouldPersistRoutingParams ? String(split) : "";
+    const nextGasless = isGasless ? "1" : "";
     const hasForeignParams =
       SWAP_QUERY_PARAMS.some((key) => params.has(key)) ||
       REQUEST_QUERY_PARAMS.some((key) => params.has(key));
@@ -601,6 +635,7 @@ export function PaymentCard() {
       currentMinDelayMs === nextMinDelayMs &&
       currentMaxDelayMs === nextMaxDelayMs &&
       currentSplit === nextSplit &&
+      currentGasless === nextGasless &&
       !currentTab &&
       !hasForeignParams
     ) {
@@ -645,6 +680,12 @@ export function PaymentCard() {
       params.delete("split");
     }
 
+    if (isGasless) {
+      params.set("gasless", "1");
+    } else {
+      params.delete("gasless");
+    }
+
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname, {
       scroll: false,
@@ -654,6 +695,7 @@ export function PaymentCard() {
     tokenMint,
     memo,
     isPrivate,
+    isGasless,
     minDelayMs,
     maxDelayMs,
     split,
@@ -691,9 +733,18 @@ export function PaymentCard() {
   const handleSplitChange = useCallback(
     (nextSplit: number) => {
       resetResultState();
-      setSplit(clampSplit(nextSplit));
+      setSplit(clampPrivateSplit(nextSplit));
     },
     [resetResultState]
+  );
+
+  const handleGaslessChange = useCallback(
+    (checked: boolean) => {
+      resetResultState();
+      gaslessAutoOptOutRef.current = walletSolLamports === 0 && !checked;
+      setIsGasless(checked);
+    },
+    [resetResultState, walletSolLamports]
   );
 
   const signAndSendUnsignedTransaction = useCallback(
@@ -732,7 +783,7 @@ export function PaymentCard() {
       );
 
       if (confirmation.value.err) {
-        throw new Error("Transaction failed on-chain");
+        throw new Error(`Transaction failed on-chain: ${signature}`);
       }
 
       return signature;
@@ -803,13 +854,14 @@ export function PaymentCard() {
           mint: tokenMint,
           amount: rawAmount,
           visibility: isPrivate ? "private" : "public",
+          ...(isGasless ? { gasless: true } : {}),
           ...(memo ? { memo } : {}),
           ...(isPrivate
             ? {
-                minDelayMs: String(minDelayMs),
-                maxDelayMs: String(maxDelayMs),
-                split,
-              }
+              minDelayMs: String(minDelayMs),
+              maxDelayMs: String(maxDelayMs),
+              split,
+            }
             : {}),
         }),
       });
@@ -851,6 +903,7 @@ export function PaymentCard() {
     resolvedReceiver,
     tokenMint,
     isPrivate,
+    isGasless,
     memo,
     minDelayMs,
     maxDelayMs,
@@ -1006,204 +1059,170 @@ export function PaymentCard() {
 
           {/* Private Transfer Toggle */}
           <div className="mx-3 mt-2">
-            <div className="rounded-xl border border-border/30 bg-[var(--surface-inner)] transition-colors group hover:border-border/60">
-              <label
-                htmlFor="private-toggle"
-                className="flex w-full cursor-pointer items-center justify-between gap-3 px-4 py-3 select-none"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  {isPrivate ? (
-                    <ShieldCheck className="w-5 h-5 shrink-0 text-primary" />
-                  ) : (
-                    <Shield className="w-5 h-5 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
-                  )}
-                  <div className="min-w-0 text-left">
-                    <div className="text-sm font-medium text-foreground">
-                      Private transfer
+            <PrivateRoutingControls
+              id="private-transfer-toggle"
+              label="Private transfer"
+              enabled={isPrivate}
+              onEnabledChange={(enabled) => {
+                setIsPrivate(enabled);
+                resetResultState();
+              }}
+              summary={routingSummary}
+              disabledDescription="Enable MagicBlock private transactions"
+              minDelayMs={minDelayMs}
+              maxDelayMs={maxDelayMs}
+              onDelayRangeChange={handleDelayRangeChange}
+              split={split}
+              onSplitChange={handleSplitChange}
+            />
+          </div >
+          <div className="mx-3 mt-2 flex items-center justify-between gap-3 rounded-xl bg-secondary/30 px-4 py-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                <span>Gasless sponsor</span>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      className="rounded-full p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+                      aria-label="What does gasless sponsor mean?"
+                    >
+                      <CircleHelp className="h-3.5 w-3.5" />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="start"
+                    className="w-72 rounded-xl border-border/60 bg-[var(--surface-inner)] p-3"
+                  >
+                    <div className="text-sm font-semibold text-foreground">
+                      No more &quot;insufficient SOL&quot;
                     </div>
-                    <div className="truncate text-xs text-muted-foreground">
-                      {isPrivate
-                        ? routingSummary
-                        : "Enable MagicBlock private transactions"}
+                    <div className="mt-2 text-xs leading-5 text-muted-foreground">
+                      Use this if you do not have enough SOL, or if you just want a sponsor to cover the network fees for you.
                     </div>
-                  </div>
-                </div>
-
-                {/* Material Design 3 Toggle Switch */}
-                <div className="relative shrink-0">
-                  <input
-                    id="private-toggle"
-                    type="checkbox"
-                    checked={isPrivate}
-                    onChange={() => setIsPrivate(!isPrivate)}
-                    className="sr-only peer"
-                  />
-                  <div
-                    className={[
-                      "w-[52px] h-8 rounded-full border-2 transition-all duration-200",
-                      isPrivate
-                        ? "bg-primary border-primary"
-                        : "bg-transparent border-muted-foreground/50",
-                    ].join(" ")}
-                  />
-                  <div
-                    className={[
-                      "absolute rounded-full shadow-md transition-all duration-200 ease-in-out",
-                      isPrivate
-                        ? "top-1 left-[24px] w-6 h-6 bg-primary-foreground"
-                        : "top-[6px] left-[6px] w-5 h-5 bg-muted-foreground",
-                    ].join(" ")}
-                  />
-                  {isPrivate && (
-                    <Check className="absolute top-1 left-[24px] w-6 h-6 p-1 text-primary pointer-events-none" />
-                  )}
-                </div>
-              </label>
-
-              <div
-                className={`overflow-hidden transition-all duration-300 ease-in-out ${
-                  isPrivate ? "max-h-24 opacity-100" : "max-h-0 opacity-0"
-                }`}
-              >
-                <div className="flex items-center gap-2 border-t border-border/20 px-4 pb-2.5 pt-2">
-                  <div className="min-w-0 flex-1 px-1">
-                    <Slider
-                      aria-label="Private delay range"
-                      value={[minDelayMs, maxDelayMs]}
-                      min={0}
-                      max={MAX_PRIVATE_DELAY_MS}
-                      step={1000}
-                      onValueChange={handleDelayRangeChange}
-                    />
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    {[1, 2, 4].map((preset) => {
-                      const isActive = split === preset;
-                      return (
-                        <button
-                          key={preset}
-                          type="button"
-                          onClick={() => handleSplitChange(preset)}
-                          className={`h-6 min-w-6 rounded-full px-1.5 text-[11px] font-medium transition-colors cursor-pointer ${
-                            isActive
-                              ? "bg-primary text-primary-foreground"
-                              : "bg-secondary text-muted-foreground hover:text-foreground"
-                          }`}
-                        >
-                          {preset}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <input
-                    type="number"
-                    aria-label="Custom split count"
-                    min={1}
-                    max={10}
-                    step={1}
-                    value={split}
-                    onChange={(e) => {
-                      const nextValue = parseInt(e.target.value, 10);
-                      handleSplitChange(Number.isNaN(nextValue) ? 1 : nextValue);
-                    }}
-                    className="h-6 w-10 shrink-0 rounded-lg border border-border/50 bg-background px-1.5 text-center text-[11px] text-foreground outline-none [appearance:textfield] [-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                  />
-                </div>
+                    <div className="mt-2 text-xs leading-5 text-muted-foreground">
+                      A sponsor wallet pays the SOL needed to submit this payment.
+                    </div>
+                    <div className="mt-2 text-xs leading-5 text-muted-foreground">
+                      The payment still charges token fees in the token you are sending, such as USDC.
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                {walletSolLamports === 0 && isGasless
+                  ? "Enabled automatically because your wallet has no SOL."
+                  : walletSolLamports === 0
+                    ? "Your wallet has no SOL. Turn this on if you want a sponsor to cover the network fees."
+                    : "Sponsor pays SOL. The transfer still charges token fees."}
               </div>
             </div>
+            <Switch
+              checked={isGasless}
+              onCheckedChange={handleGaslessChange}
+              aria-label="Enable gasless transfer"
+            />
           </div>
 
           {/* Your address */}
-          {connected && publicKey && (
-            <div className="mx-3 mt-2 flex items-center justify-between px-4 py-2.5 rounded-xl bg-secondary/30">
-              <div className="text-xs text-muted-foreground">
-                Sending from{" "}
-                <span className="font-mono text-foreground/70">
-                  {publicKey.toBase58().slice(0, 4)}...{publicKey.toBase58().slice(-4)}
-                </span>
+          {
+            connected && publicKey && (
+              <div className="mx-3 mt-2 flex items-center justify-between px-4 py-2.5 rounded-xl bg-secondary/30">
+                <div className="text-xs text-muted-foreground">
+                  Sending from{" "}
+                  <span className="font-mono text-foreground/70">
+                    {publicKey.toBase58().slice(0, 4)}...{publicKey.toBase58().slice(-4)}
+                  </span>
+                </div>
+                <button
+                  onClick={handleCopyAddress}
+                  className="p-1 rounded-md hover:bg-accent transition-colors cursor-pointer"
+                >
+                  {copied ? (
+                    <Check className="w-3 h-3 text-success" />
+                  ) : (
+                    <Copy className="w-3 h-3 text-muted-foreground" />
+                  )}
+                </button>
               </div>
-              <button
-                onClick={handleCopyAddress}
-                className="p-1 rounded-md hover:bg-accent transition-colors cursor-pointer"
-              >
-                {copied ? (
-                  <Check className="w-3 h-3 text-success" />
-                ) : (
-                  <Copy className="w-3 h-3 text-muted-foreground" />
-                )}
-              </button>
-            </div>
-          )}
+            )
+          }
 
           {/* Error */}
-          {error && status === "error" && (
-            <div className="mx-3 mt-2 flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/20">
-              <span className="text-xs text-destructive">{error}</span>
-              {txSignature && (
+          {
+            error && status === "error" && (
+              <div className="mx-3 mt-2 flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/20">
+                <span className="text-xs text-destructive">{error}</span>
+                {txSignature && (
+                  <a
+                    href={`/api/explorer/tx?signature=${encodeURIComponent(txSignature)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="shrink-0 flex items-center gap-1 text-xs text-destructive hover:underline"
+                  >
+                    View tx
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
+              </div>
+            )
+          }
+
+          {
+            isMintInitialized === false && (
+              <div className="mx-3 mt-2 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3">
+                <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-foreground">
+                          Private payments are not enabled for this mint yet.
+                        </div>
+                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                          Pay the fees (~0.2 SOL) and set it up permissionlessly.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={connected ? handleSetupMint : openConnectModal}
+                        disabled={isSettingUpMint}
+                        className="mt-0.5 inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {isSettingUpMint && <Loader2 className="h-4 w-4 animate-spin" />}
+                        {connected ? "Set Up" : "Connect Wallet to Set Up"}
+                      </button>
+                    </div>
+                    {mintSetupError && (
+                      <div className="mt-2 text-xs text-destructive">
+                        {mintSetupError}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )
+          }
+
+          {/* Success */}
+          {
+            status === "confirmed" && txSignature && (
+              <div className="mx-3 mt-2 flex items-center justify-between px-3 py-2 rounded-lg bg-success/10 border border-success/20">
+                <div className="flex items-center gap-2">
+                  <Check className="w-4 h-4 text-success" />
+                  <span className="text-xs text-success">Payment sent!</span>
+                </div>
                 <a
                   href={`/api/explorer/tx?signature=${encodeURIComponent(txSignature)}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="shrink-0 flex items-center gap-1 text-xs text-destructive hover:underline"
+                  className="flex items-center gap-1 text-xs text-success hover:underline"
                 >
                   View tx
                   <ExternalLink className="w-3 h-3" />
                 </a>
-              )}
-            </div>
-          )}
-
-          {isMintInitialized === false && (
-            <div className="mx-3 mt-2 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3">
-              <div className="min-w-0">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium text-foreground">
-                        Private payments are not enabled for this mint yet.
-                      </div>
-                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                        Pay the fees (~0.2 SOL) and set it up permissionlessly.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={connected ? handleSetupMint : openConnectModal}
-                      disabled={isSettingUpMint}
-                      className="mt-0.5 inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {isSettingUpMint && <Loader2 className="h-4 w-4 animate-spin" />}
-                      {connected ? "Set Up" : "Connect Wallet to Set Up"}
-                    </button>
-                  </div>
-                  {mintSetupError && (
-                    <div className="mt-2 text-xs text-destructive">
-                      {mintSetupError}
-                    </div>
-                  )}
-                </div>
               </div>
-            </div>
-          )}
-
-          {/* Success */}
-          {status === "confirmed" && txSignature && (
-            <div className="mx-3 mt-2 flex items-center justify-between px-3 py-2 rounded-lg bg-success/10 border border-success/20">
-              <div className="flex items-center gap-2">
-                <Check className="w-4 h-4 text-success" />
-                <span className="text-xs text-success">Payment sent!</span>
-              </div>
-              <a
-                href={`/api/explorer/tx?signature=${encodeURIComponent(txSignature)}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 text-xs text-success hover:underline"
-              >
-                View tx
-                <ExternalLink className="w-3 h-3" />
-              </a>
-            </div>
-          )}
+            )
+          }
 
           {/* Action Button */}
           <div className="p-3 pt-3">
@@ -1228,8 +1247,8 @@ export function PaymentCard() {
               onReset={handleReset}
             />
           </div>
-        </div>
-      </div>
+        </div >
+      </div >
 
       <TokenSelectModal
         open={modalOpen}

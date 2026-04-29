@@ -1,14 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  AGGREGATOR_ENDPOINTS,
-  getAggregatorHeaders,
-  getAggregatorTimeoutSignal,
-  getAggregatorUrl,
-} from "@/lib/aggregator";
+  PAYMENTS_ENDPOINTS,
+  getPaymentsApiUrl,
+  getPaymentsTimeoutSignal,
+} from "@/lib/payments";
 
 /**
- * Proxy to an aggregator-compatible quote API
- * https://dev.jup.ag/docs/swap-api/get-quote
+ * Proxy to the payments swap quote API.
  *
  * Query params: inputMint, outputMint, amount (in lamports/smallest unit),
  *               slippageBps (default 50 = 0.5%)
@@ -37,36 +35,43 @@ export async function GET(request: NextRequest) {
   const parsedSlippageBps = Number(slippageBps);
   if (
     !Number.isFinite(parsedSlippageBps) ||
-    parsedSlippageBps <= 0 ||
+    parsedSlippageBps < 0 ||
     parsedSlippageBps > 5000
   ) {
     return NextResponse.json(
-      { error: "slippageBps must be between 1 and 5000" },
+      { error: "slippageBps must be between 0 and 5000" },
       { status: 400 }
     );
   }
 
   try {
-    const res = await fetch(
-      getAggregatorUrl(AGGREGATOR_ENDPOINTS.swapQuote, {
-        inputMint,
-        outputMint,
-        amount,
-        slippageBps: parsedSlippageBps,
-        restrictIntermediateTokens: true,
-      }),
-      {
-        headers: getAggregatorHeaders(),
-        signal: getAggregatorTimeoutSignal(),
-        cache: "no-store",
-      }
-    );
+    const upstreamUrl = new URL(getPaymentsApiUrl(PAYMENTS_ENDPOINTS.swapQuote));
+    upstreamUrl.searchParams.set("inputMint", inputMint);
+    upstreamUrl.searchParams.set("outputMint", outputMint);
+    upstreamUrl.searchParams.set("amount", amount);
+    upstreamUrl.searchParams.set("slippageBps", String(parsedSlippageBps));
+    upstreamUrl.searchParams.set("restrictIntermediateTokens", "true");
+
+    const res = await fetch(upstreamUrl, {
+      signal: getPaymentsTimeoutSignal(),
+      cache: "no-store",
+    });
 
     if (!res.ok) {
-      const errorText = await res.text();
-      console.error("Aggregator quote error:", res.status, errorText);
+      const responseBody = await res.json().catch(() => null);
+      const errorMessage =
+        responseBody &&
+        typeof responseBody === "object" &&
+        "error" in responseBody &&
+        responseBody.error &&
+        typeof responseBody.error === "object" &&
+        "message" in responseBody.error &&
+        typeof responseBody.error.message === "string"
+          ? responseBody.error.message
+          : `Payments API error: ${res.status}`;
+
       return NextResponse.json(
-        { error: `Aggregator quote error: ${res.status}`, details: errorText },
+        { error: errorMessage, details: responseBody },
         { status: res.status }
       );
     }
