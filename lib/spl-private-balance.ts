@@ -11,10 +11,7 @@ export function getStoredPrivateAuthToken(pubkeyBase58: string): string | null {
   }
 }
 
-export function setStoredPrivateAuthToken(
-  pubkeyBase58: string,
-  token: string,
-) {
+export function setStoredPrivateAuthToken(pubkeyBase58: string, token: string) {
   localStorage.setItem(`${STORAGE_PREFIX}:${pubkeyBase58}`, token);
 }
 
@@ -25,6 +22,7 @@ export function clearStoredPrivateAuthToken(pubkeyBase58: string) {
 export async function fetchSplChallenge(pubkeyBase58: string): Promise<string> {
   const params = new URLSearchParams({
     pubkey: pubkeyBase58,
+    mock: process.env.NEXT_PUBLIC_MOCK_TEE ?? "false",
   });
   const res = await fetch(getPaymentsApiUrl(`/v1/spl/challenge?${params}`));
   if (!res.ok) {
@@ -49,6 +47,7 @@ export async function loginSplPrivate(params: {
       challenge: params.challenge,
       signature: params.signature,
       cluster: PAYMENTS_CLUSTER,
+      mock: process.env.NEXT_PUBLIC_MOCK_TEE === "true",
     }),
   });
   if (!res.ok) {
@@ -88,7 +87,7 @@ export async function fetchPrivateBalance(
   });
   const res = await fetch(
     getPaymentsApiUrl(`/v1/spl/private-balance?${params}`),
-    { headers: { Authorization: `Bearer ${authToken}` } }
+    { headers: { Authorization: `Bearer ${authToken}` } },
   );
   if (!res.ok) {
     let message = `Balance failed (${res.status})`;
