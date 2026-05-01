@@ -6,6 +6,8 @@ import {
   ExternalLink,
   Check,
   CircleHelp,
+  ChevronDown,
+  Settings2,
   Shield,
   ShieldCheck,
   User,
@@ -251,6 +253,7 @@ export function PaymentCard() {
   const [maxDelayMs, setMaxDelayMs] = useState(() => initialMaxDelayMs);
   const [split, setSplit] = useState(() => initialSplit);
   const [exactOut, setExactOut] = useState(true);
+  const [advancedOpen, setAdvancedOpen] = useState(() => initialGasless);
   const [modalOpen, setModalOpen] = useState(false);
   const [resolvedDomainAddress, setResolvedDomainAddress] = useState<string | null>(null);
   const [recipientPrimaryDomain, setRecipientPrimaryDomain] = useState<string | null>(null);
@@ -446,6 +449,7 @@ export function PaymentCard() {
 
     if (walletSolLamports === 0 && !isGasless && !gaslessAutoOptOutRef.current) {
       setIsGasless(true);
+      setAdvancedOpen(true);
     }
   }, [walletSolLamports, isGasless]);
 
@@ -1060,28 +1064,6 @@ export function PaymentCard() {
             </div>
           </div>
 
-          {/* Exact Out Toggle */}
-          <div className="mx-3 mt-2 flex items-center justify-between gap-3 rounded-xl bg-secondary/30 px-4 py-3">
-            <div className="min-w-0">
-              <div className="text-xs font-medium text-foreground">
-                Exact out
-              </div>
-              <div className="text-[11px] text-muted-foreground">
-                {exactOut
-                  ? "Recipient gets the entered amount. Fees are charged to sender."
-                  : "Fees may be deducted from the recipient amount."}
-              </div>
-            </div>
-            <Switch
-              checked={exactOut}
-              onCheckedChange={(enabled) => {
-                setExactOut(enabled);
-                resetResultState();
-              }}
-              aria-label="Enable exact out transfer"
-            />
-          </div>
-
           {/* Private Transfer Toggle */}
           <div className="mx-3 mt-2">
             <PrivateRoutingControls
@@ -1101,52 +1083,103 @@ export function PaymentCard() {
               onSplitChange={handleSplitChange}
             />
           </div >
-          <div className="mx-3 mt-2 flex items-center justify-between gap-3 rounded-xl bg-secondary/30 px-4 py-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-                <span>Gasless sponsor</span>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <button
-                      type="button"
-                      className="rounded-full p-0.5 text-muted-foreground transition-colors hover:text-foreground"
-                      aria-label="What does gasless sponsor mean?"
-                    >
-                      <CircleHelp className="h-3.5 w-3.5" />
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent
-                    align="start"
-                    className="w-72 rounded-xl border-border/60 bg-[var(--surface-inner)] p-3"
-                  >
-                    <div className="text-sm font-semibold text-foreground">
-                      No more &quot;insufficient SOL&quot;
+
+          {/* Advanced settings */}
+          <div className="mx-3 mt-2">
+            <div className="rounded-xl bg-secondary/30">
+              <button
+                type="button"
+                onClick={() => setAdvancedOpen((open) => !open)}
+                className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-secondary/50 rounded-xl cursor-pointer"
+                aria-expanded={advancedOpen}
+                aria-controls="advanced-settings-panel"
+              >
+                <div className="flex items-center gap-2">
+                  <Settings2 className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-xs font-medium text-foreground">Advanced</span>
+                </div>
+                <ChevronDown
+                  className={`h-4 w-4 text-muted-foreground transition-transform ${advancedOpen ? "rotate-180" : ""}`}
+                />
+              </button>
+              {advancedOpen && (
+                <div
+                  id="advanced-settings-panel"
+                  className="border-t border-border/40 px-4 py-3 space-y-4"
+                >
+                  {/* Exact Out */}
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium text-foreground">
+                        Exact out
+                      </div>
+                      <div className="text-[11px] text-muted-foreground">
+                        {exactOut
+                          ? "Recipient gets the entered amount. Fees are charged to sender."
+                          : "Fees may be deducted from the recipient amount."}
+                      </div>
                     </div>
-                    <div className="mt-2 text-xs leading-5 text-muted-foreground">
-                      Use this if you do not have enough SOL, or if you just want a sponsor to cover the network fees for you.
+                    <Switch
+                      checked={exactOut}
+                      onCheckedChange={(enabled) => {
+                        setExactOut(enabled);
+                        resetResultState();
+                      }}
+                      aria-label="Enable exact out transfer"
+                    />
+                  </div>
+
+                  {/* Gasless sponsor */}
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                        <span>Gasless sponsor</span>
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <button
+                              type="button"
+                              className="rounded-full p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+                              aria-label="What does gasless sponsor mean?"
+                            >
+                              <CircleHelp className="h-3.5 w-3.5" />
+                            </button>
+                          </PopoverTrigger>
+                          <PopoverContent
+                            align="start"
+                            className="w-72 rounded-xl border-border/60 bg-[var(--surface-inner)] p-3"
+                          >
+                            <div className="text-sm font-semibold text-foreground">
+                              No more &quot;insufficient SOL&quot;
+                            </div>
+                            <div className="mt-2 text-xs leading-5 text-muted-foreground">
+                              Use this if you do not have enough SOL, or if you just want a sponsor to cover the network fees for you.
+                            </div>
+                            <div className="mt-2 text-xs leading-5 text-muted-foreground">
+                              A sponsor wallet pays the SOL needed to submit this payment.
+                            </div>
+                            <div className="mt-2 text-xs leading-5 text-muted-foreground">
+                              The payment still charges token fees in the token you are sending, such as USDC.
+                            </div>
+                          </PopoverContent>
+                        </Popover>
+                      </div>
+                      <div className="text-[11px] text-muted-foreground">
+                        {walletSolLamports === 0 && isGasless
+                          ? "Enabled automatically because your wallet has no SOL."
+                          : walletSolLamports === 0
+                            ? "Your wallet has no SOL. Turn this on if you want a sponsor to cover the network fees."
+                            : "Sponsor pays SOL. The transfer still charges token fees."}
+                      </div>
                     </div>
-                    <div className="mt-2 text-xs leading-5 text-muted-foreground">
-                      A sponsor wallet pays the SOL needed to submit this payment.
-                    </div>
-                    <div className="mt-2 text-xs leading-5 text-muted-foreground">
-                      The payment still charges token fees in the token you are sending, such as USDC.
-                    </div>
-                  </PopoverContent>
-                </Popover>
-              </div>
-              <div className="text-[11px] text-muted-foreground">
-                {walletSolLamports === 0 && isGasless
-                  ? "Enabled automatically because your wallet has no SOL."
-                  : walletSolLamports === 0
-                    ? "Your wallet has no SOL. Turn this on if you want a sponsor to cover the network fees."
-                    : "Sponsor pays SOL. The transfer still charges token fees."}
-              </div>
+                    <Switch
+                      checked={isGasless}
+                      onCheckedChange={handleGaslessChange}
+                      aria-label="Enable gasless transfer"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
-            <Switch
-              checked={isGasless}
-              onCheckedChange={handleGaslessChange}
-              aria-label="Enable gasless transfer"
-            />
           </div>
 
           {/* Your address */}

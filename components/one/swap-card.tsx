@@ -299,6 +299,7 @@ export function SwapCard({
   const [maxDelayMs, setMaxDelayMs] = useState(0);
   const [split, setSplit] = useState(1);
   const [resolvedDomainAddress, setResolvedDomainAddress] = useState<string | null>(null);
+  const [domainResolutionFailed, setDomainResolutionFailed] = useState(false);
   const [recipientPrimaryDomain, setRecipientPrimaryDomain] = useState<string | null>(null);
   const [isResolvingRecipient, setIsResolvingRecipient] = useState(false);
   const [recipientTokenBalance, setRecipientTokenBalance] = useState<string | null>(null);
@@ -459,34 +460,37 @@ export function SwapCard({
   }, [outputAmount, prices, buyMint]);
 
   useEffect(() => {
-    let cancelled = false;
-
     setResolvedDomainAddress(null);
+    setDomainResolutionFailed(false);
 
     if (!trimmedDestination || directDestinationAddress || !isDomainDestination) {
       setIsResolvingRecipient(false);
-      return () => {
-        cancelled = true;
-      };
+      return;
     }
 
-    setIsResolvingRecipient(true);
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      setIsResolvingRecipient(true);
 
-    void resolve(connection, trimmedDestination.toLowerCase())
-      .then((publicKey) => {
-        if (cancelled) return;
-        setResolvedDomainAddress(publicKey.toBase58());
-      })
-      .catch(() => {
-        if (cancelled) return;
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setIsResolvingRecipient(false);
-      });
+      void resolve(connection, trimmedDestination.toLowerCase())
+        .then((publicKey) => {
+          if (cancelled) return;
+          setResolvedDomainAddress(publicKey.toBase58());
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setDomainResolutionFailed(true);
+        })
+        .finally(() => {
+          if (cancelled) return;
+          setIsResolvingRecipient(false);
+        });
+    }, 300);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [
     connection,
@@ -1153,6 +1157,16 @@ export function SwapCard({
                       <span className="font-mono text-foreground">
                         {shortenAddress(resolvedDestination)}
                       </span>
+                    </div>
+                  )}
+                {destination &&
+                  isDomainDestination &&
+                  !resolvedDestination &&
+                  !isResolvingRecipient &&
+                  domainResolutionFailed && (
+                    <div className="mt-2 flex items-center gap-1.5 text-xs text-destructive">
+                      <AlertTriangle className="h-3 w-3" />
+                      Could not resolve {trimmedDestination}
                     </div>
                   )}
                 {destination && !isResolvingRecipient && isValidDestination && (
