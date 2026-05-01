@@ -250,7 +250,6 @@ export function PaymentCard() {
   const [minDelayMs, setMinDelayMs] = useState(() => initialMinDelayMs);
   const [maxDelayMs, setMaxDelayMs] = useState(() => initialMaxDelayMs);
   const [split, setSplit] = useState(() => initialSplit);
-  const [exactOut, setExactOut] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [resolvedDomainAddress, setResolvedDomainAddress] = useState<string | null>(null);
   const [recipientPrimaryDomain, setRecipientPrimaryDomain] = useState<string | null>(null);
@@ -857,7 +856,6 @@ export function PaymentCard() {
           visibility: isPrivate ? "private" : "public",
           ...(isGasless ? { gasless: true } : {}),
           ...(memo ? { memo } : {}),
-          exactOut,
           ...(isPrivate
             ? {
               minDelayMs: String(minDelayMs),
@@ -907,7 +905,6 @@ export function PaymentCard() {
     isPrivate,
     isGasless,
     memo,
-    exactOut,
     minDelayMs,
     maxDelayMs,
     split,
@@ -1058,28 +1055,6 @@ export function PaymentCard() {
                 className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground/40 outline-none"
               />
             </div>
-          </div>
-
-          {/* Exact Out Toggle */}
-          <div className="mx-3 mt-2 flex items-center justify-between gap-3 rounded-xl bg-secondary/30 px-4 py-3">
-            <div className="min-w-0">
-              <div className="text-xs font-medium text-foreground">
-                Exact out
-              </div>
-              <div className="text-[11px] text-muted-foreground">
-                {exactOut
-                  ? "Recipient gets the entered amount. Fees are charged to sender."
-                  : "Fees may be deducted from the recipient amount."}
-              </div>
-            </div>
-            <Switch
-              checked={exactOut}
-              onCheckedChange={(enabled) => {
-                setExactOut(enabled);
-                resetResultState();
-              }}
-              aria-label="Enable exact out transfer"
-            />
           </div>
 
           {/* Private Transfer Toggle */}
