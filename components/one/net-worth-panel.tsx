@@ -147,6 +147,9 @@ export function NetWorthPanel() {
     return null;
   }
 
+  // TEMP: hide the authenticate card. Delete this line to restore it.
+  if (needsAuthOverlay) return null;
+
   const balanceLabel = (mint: string, decimals: number) => {
     if (!authToken) return "—";
     if (balanceLoading) return "…";

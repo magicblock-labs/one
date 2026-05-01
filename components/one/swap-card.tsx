@@ -1191,7 +1191,7 @@ export function SwapCard({
           </div>
 
           {/* Quote Details */}
-          {(status === "ready" || status === "building" || status === "signing" || status === "sending" || status === "confirming") && outputAmount > 0 && (
+          {(status === "ready" || status === "building" || status === "signing" || status === "sending" || status === "confirming") && outputAmount > 0 && !(isPrivate && isMintInitialized === false) && (
             <div className="mx-3 mt-2 px-4 py-3 rounded-xl bg-secondary/30 border border-border/20 space-y-1.5">
               {routeLabel && (
                 <div className="flex items-center justify-between text-xs">
@@ -1245,8 +1245,19 @@ export function SwapCard({
 
           {/* Swap Error */}
           {swapError && status === "error" && (
-            <div className="mx-3 mt-2 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/20">
+            <div className="mx-3 mt-2 flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/20">
               <span className="text-xs text-destructive">{swapError}</span>
+              {txSignature && (
+                <a
+                  href={`/api/explorer/tx?signature=${encodeURIComponent(txSignature)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="shrink-0 flex items-center gap-1 text-xs text-destructive hover:underline"
+                >
+                  View tx
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              )}
             </div>
           )}
 
