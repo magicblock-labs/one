@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, ArrowLeftRight, Send, QrCode } from "lucide-react";
+import { AlertTriangle, ArrowLeftRight, Send, QrCode, X } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { SwapCard } from "./swap-card";
 import { PaymentCard } from "./payment-card";
@@ -86,8 +86,29 @@ export function TradeHub({
             ? "swap"
             : "payment"
   );
+  const [noticeDismissed, setNoticeDismissed] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem("private-payments-beta-dismissed") === "1") {
+        setNoticeDismissed(true);
+      }
+    } catch {
+      // ignore storage access errors (private mode, etc.)
+    }
+  }, []);
+
+  const dismissPrivatePaymentsNotice = useCallback(() => {
+    setNoticeDismissed(true);
+    try {
+      window.localStorage.setItem("private-payments-beta-dismissed", "1");
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const showPrivatePaymentsNotice =
-    activeTop === "payment" && !searchParams.has("public");
+    activeTop === "payment" && !searchParams.has("public") && !noticeDismissed;
 
   useEffect(() => {
     if (urlTab === "swap" || urlTab === "payment" || urlTab === "request") {
@@ -140,8 +161,8 @@ export function TradeHub({
   return (
     <div className="w-full max-w-[480px] mx-auto">
       {showPrivatePaymentsNotice && (
-        <div className="mb-4 w-full pointer-events-none sm:fixed sm:bottom-4 sm:left-1/2 sm:z-30 sm:w-[calc(100vw-2rem)] sm:max-w-[44rem] sm:-translate-x-1/2 xl:max-w-[52rem]">
-          <div className="rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-4 py-3 shadow-lg shadow-black/20 backdrop-blur-md">
+        <div className="mb-4 w-full sm:fixed sm:bottom-4 sm:right-4 sm:left-auto sm:z-30 sm:mb-0 sm:w-[calc(100vw-2rem)] sm:max-w-xs">
+          <div className="relative rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-4 py-3 pr-9 shadow-lg shadow-black/20 backdrop-blur-md">
             <div className="flex items-start gap-2.5">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-400" />
               <div className="min-w-0">
@@ -156,6 +177,14 @@ export function TradeHub({
                 </div>
               </div>
             </div>
+            <button
+              type="button"
+              onClick={dismissPrivatePaymentsNotice}
+              aria-label="Dismiss private payments beta notice"
+              className="absolute right-2 top-2 rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground cursor-pointer"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
         </div>
       )}
