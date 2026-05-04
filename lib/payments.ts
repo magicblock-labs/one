@@ -80,5 +80,3 @@ export function getPaymentsExplorerTransactionUrl(signature: string) {
 
   return explorerUrl.toString();
 }
-
-export const MOCK_TEE = process.env.NEXT_PUBLIC_MOCK_TEE === "true";
