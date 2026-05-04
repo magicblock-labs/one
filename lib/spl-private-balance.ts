@@ -1,4 +1,4 @@
-import { getPaymentsApiUrl, PAYMENTS_CLUSTER } from "@/lib/payments";
+import { getPaymentsApiUrl, PAYMENTS_CLUSTER, MOCK_TEE } from "@/lib/payments";
 
 const STORAGE_PREFIX = "magicblock:spl-private-auth-token";
 
@@ -22,7 +22,7 @@ export function clearStoredPrivateAuthToken(pubkeyBase58: string) {
 export async function fetchSplChallenge(pubkeyBase58: string): Promise<string> {
   const params = new URLSearchParams({
     pubkey: pubkeyBase58,
-    mock: process.env.NEXT_PUBLIC_MOCK_TEE ?? "false",
+    mock: String(MOCK_TEE),
   });
   const res = await fetch(getPaymentsApiUrl(`/v1/spl/challenge?${params}`));
   if (!res.ok) {
@@ -47,7 +47,7 @@ export async function loginSplPrivate(params: {
       challenge: params.challenge,
       signature: params.signature,
       cluster: PAYMENTS_CLUSTER,
-      mock: process.env.NEXT_PUBLIC_MOCK_TEE === "true",
+      mock: MOCK_TEE,
     }),
   });
   if (!res.ok) {

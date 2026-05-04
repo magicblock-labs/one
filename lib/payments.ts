@@ -46,7 +46,9 @@ export const PAYMENTS_API_BASE_URL = (
   configuredPaymentsApiBaseUrl || DEFAULT_PAYMENTS_API_BASE_URL
 ).replace(/\/+$/, "");
 
-export const PAYMENTS_CLUSTER = normalizePaymentsCluster(configuredPaymentsCluster);
+export const PAYMENTS_CLUSTER = normalizePaymentsCluster(
+  configuredPaymentsCluster,
+);
 export const PAYMENTS_DEFAULT_USDC_MINT =
   configuredPaymentsTestUsdcMint || USDC_MINT;
 
@@ -69,7 +71,7 @@ export function getPaymentsTimeoutSignal(timeoutMs = 15_000) {
 export function getPaymentsExplorerTransactionUrl(signature: string) {
   const explorerUrl = new URL(
     `/tx/${encodeURIComponent(signature)}`,
-    "https://explorer.solana.com"
+    "https://explorer.solana.com",
   );
 
   if (PAYMENTS_CLUSTER === "devnet" || PAYMENTS_CLUSTER === "testnet") {
@@ -78,3 +80,5 @@ export function getPaymentsExplorerTransactionUrl(signature: string) {
 
   return explorerUrl.toString();
 }
+
+export const MOCK_TEE = process.env.NEXT_PUBLIC_MOCK_TEE === "true";
