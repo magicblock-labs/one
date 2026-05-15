@@ -4,7 +4,8 @@
 // https://docs.sentry.io/platforms/javascript/guides/nextjs/
 
 import * as Sentry from "@sentry/nextjs";
+import { SENTRY_DSN } from "./lib/sentry";
 
 Sentry.init({
-  dsn: "https://81551955b403808ca0d241b04b855620@o4511348334854144.ingest.us.sentry.io/4511370863181824",
+  dsn: SENTRY_DSN,
 });
