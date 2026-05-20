@@ -65,9 +65,11 @@ export const PAYMENTS_ENDPOINTS = {
   withdraw: "/v1/spl/withdraw",
   initializeMint: "/v1/spl/initialize-mint",
   isMintInitialized: "/v1/spl/is-mint-initialized",
+  transferQueueEnsureCrank: "/v1/spl/transfer-queue/ensure-crank",
   splTransfer: "/v1/spl/transfer",
   undelegateEphemeralAta: "/v1/spl/undelegate-ephemeral-ata",
   transactionSend: "/v1/transaction/send",
+  stealthPool: "/v1/spl/stealth-pool",
   swapQuote: "/v1/swap/quote",
   swap: "/v1/swap/swap",
 } as const;

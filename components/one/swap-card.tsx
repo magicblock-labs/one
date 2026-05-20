@@ -30,6 +30,7 @@ import {
   SOL_MINT,
   findTokenByMint,
 } from "@/lib/tokens";
+import { ensurePaymentTransferQueueCrank } from "@/lib/payment-transactions";
 import { usePrices } from "@/hooks/use-sol-price";
 import { useAggregatorTokens } from "@/hooks/use-aggregator-tokens";
 import { useSwap, type SwapStatus } from "@/hooks/use-swap";
@@ -734,6 +735,15 @@ export function SwapCard({
 
       await signAndSendUnsignedTransaction(unsignedTransaction);
       setIsMintInitialized(true);
+
+      try {
+        await ensurePaymentTransferQueueCrank({
+          mint: buyMint,
+          validator: unsignedTransaction.validator,
+        });
+      } catch (error) {
+        console.warn("Failed to ensure transfer queue crank after setup", error);
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Mint setup failed";
       setMintSetupError(
