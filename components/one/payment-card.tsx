@@ -76,6 +76,8 @@ interface MintInitializationResponse {
 
 const SWAP_QUERY_PARAMS = ["buy", "sell", "amt"] as const;
 const REQUEST_QUERY_PARAMS = ["prd", "ramt", "rmint"] as const;
+const SPL_TOKEN_ACCOUNT_AMOUNT_OFFSET = 64;
+const SPL_TOKEN_ACCOUNT_AMOUNT_LENGTH = 8;
 
 function base64ToUint8Array(base64: string) {
   const binary = globalThis.atob(base64);
@@ -188,6 +190,21 @@ function formatTokenBalance(value: number) {
   });
 }
 
+function readTokenAccountAmount(data: Uint8Array) {
+  if (
+    data.byteLength <
+    SPL_TOKEN_ACCOUNT_AMOUNT_OFFSET + SPL_TOKEN_ACCOUNT_AMOUNT_LENGTH
+  ) {
+    return BigInt(0);
+  }
+
+  return new DataView(
+    data.buffer,
+    data.byteOffset + SPL_TOKEN_ACCOUNT_AMOUNT_OFFSET,
+    SPL_TOKEN_ACCOUNT_AMOUNT_LENGTH
+  ).getBigUint64(0, true);
+}
+
 async function fetchFormattedTokenBalance(
   connection: Connection,
   owner: PublicKey,
@@ -199,16 +216,17 @@ async function fetchFormattedTokenBalance(
     return formatTokenBalance(lamports / Math.pow(10, decimals));
   }
 
-  const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+  const tokenAccounts = await connection.getTokenAccountsByOwner(
     owner,
     { mint: new PublicKey(tokenMint) },
     "confirmed"
   );
 
-  const uiAmount = tokenAccounts.value.reduce((total, account) => {
-    const tokenAmount = account.account.data.parsed.info.tokenAmount;
-    return total + Number(tokenAmount.uiAmountString ?? tokenAmount.uiAmount ?? 0);
-  }, 0);
+  const rawAmount = tokenAccounts.value.reduce(
+    (total, account) => total + readTokenAccountAmount(account.account.data),
+    BigInt(0)
+  );
+  const uiAmount = Number(rawAmount) / Math.pow(10, decimals);
 
   return formatTokenBalance(uiAmount);
 }
@@ -217,6 +235,8 @@ const TOKEN_PROGRAM_IDS = [
   new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
   new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
 ];
+const DEFAULT_MIN_DELAY_MS = 3_000;
+const DEFAULT_MAX_DELAY_MS = 30_000;
 
 export function PaymentCard() {
   const pathname = usePathname();
@@ -225,12 +245,12 @@ export function PaymentCard() {
   const isInitiallyPrivate = !searchParams.has("public");
   const searchMint = searchParams.get("mint")?.trim() ?? "";
   const initialMinDelayMs = isInitiallyPrivate
-    ? parseIntegerParam(searchParams.get("min"), 0, 0, MAX_PRIVATE_DELAY_MS)
+    ? parseIntegerParam(searchParams.get("min"), DEFAULT_MIN_DELAY_MS, 0, MAX_PRIVATE_DELAY_MS)
     : 0;
   const initialMaxDelayMs = isInitiallyPrivate
     ? Math.max(
       initialMinDelayMs,
-      parseIntegerParam(searchParams.get("max"), 0, 0, MAX_PRIVATE_DELAY_MS)
+      parseIntegerParam(searchParams.get("max"), DEFAULT_MAX_DELAY_MS, 0, MAX_PRIVATE_DELAY_MS)
     )
     : 0;
   const initialSplit = isInitiallyPrivate

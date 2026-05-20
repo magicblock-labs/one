@@ -1,6 +1,16 @@
 import { getPaymentsApiUrl, PAYMENTS_CLUSTER } from "@/lib/payments";
 
 const STORAGE_PREFIX = "magicblock:spl-private-auth-token";
+export const PRIVATE_AUTH_TOKEN_EVENT = "magicblock:spl-private-auth-token";
+
+function dispatchPrivateAuthTokenEvent(pubkeyBase58: string) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent(PRIVATE_AUTH_TOKEN_EVENT, {
+      detail: { pubkey: pubkeyBase58 },
+    }),
+  );
+}
 
 export function getStoredPrivateAuthToken(pubkeyBase58: string): string | null {
   if (typeof window === "undefined") return null;
@@ -13,10 +23,12 @@ export function getStoredPrivateAuthToken(pubkeyBase58: string): string | null {
 
 export function setStoredPrivateAuthToken(pubkeyBase58: string, token: string) {
   localStorage.setItem(`${STORAGE_PREFIX}:${pubkeyBase58}`, token);
+  dispatchPrivateAuthTokenEvent(pubkeyBase58);
 }
 
 export function clearStoredPrivateAuthToken(pubkeyBase58: string) {
   localStorage.removeItem(`${STORAGE_PREFIX}:${pubkeyBase58}`);
+  dispatchPrivateAuthTokenEvent(pubkeyBase58);
 }
 
 export async function fetchSplChallenge(pubkeyBase58: string): Promise<string> {

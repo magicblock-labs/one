@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { PublicKey } from "@solana/web3.js";
 import {
   PAYMENTS_ENDPOINTS,
+  PAYMENTS_CLUSTER,
   getPaymentsApiUrl,
   getPaymentsTimeoutSignal,
 } from "@/lib/payments";
@@ -35,6 +36,13 @@ interface SwapBuildRequest {
  */
 export async function POST(request: NextRequest) {
   try {
+    if (PAYMENTS_CLUSTER === "devnet") {
+      return NextResponse.json(
+        { error: "Swap is disabled on devnet" },
+        { status: 403 }
+      );
+    }
+
     const body = (await request.json()) as SwapBuildRequest;
     const {
       quoteResponse,

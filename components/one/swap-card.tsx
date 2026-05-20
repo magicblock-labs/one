@@ -53,6 +53,9 @@ const SWAP_DESTINATION_QUERY_PARAM = "dst";
 const SWAP_MIN_DELAY_QUERY_PARAM = "smin";
 const SWAP_MAX_DELAY_QUERY_PARAM = "smax";
 const SWAP_SPLIT_QUERY_PARAM = "ssplit";
+const BUY_TOKEN_SELECTION_ENABLED = false;
+const SPL_TOKEN_ACCOUNT_AMOUNT_OFFSET = 64;
+const SPL_TOKEN_ACCOUNT_AMOUNT_LENGTH = 8;
 
 interface SwapCardProps {
   initialBuyMint?: string;
@@ -86,6 +89,21 @@ function getInitialAmount(amount: string | undefined) {
 
 function getFallbackTokenByMint(mint: string) {
   return findTokenByMint(mint, FALLBACK_TOKENS) ?? FALLBACK_TOKENS[0];
+}
+
+function readTokenAccountAmount(data: Uint8Array) {
+  if (
+    data.byteLength <
+    SPL_TOKEN_ACCOUNT_AMOUNT_OFFSET + SPL_TOKEN_ACCOUNT_AMOUNT_LENGTH
+  ) {
+    return BigInt(0);
+  }
+
+  return new DataView(
+    data.buffer,
+    data.byteOffset + SPL_TOKEN_ACCOUNT_AMOUNT_OFFSET,
+    SPL_TOKEN_ACCOUNT_AMOUNT_LENGTH
+  ).getBigUint64(0, true);
 }
 
 function parseIntegerParam(
@@ -220,16 +238,17 @@ async function fetchFormattedTokenBalance(
     return formatTokenBalance(lamports / Math.pow(10, decimals));
   }
 
-  const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+  const tokenAccounts = await connection.getTokenAccountsByOwner(
     owner,
     { mint: new PublicKey(tokenMint) },
     "confirmed"
   );
 
-  const uiAmount = tokenAccounts.value.reduce((total, account) => {
-    const tokenAmount = account.account.data.parsed.info.tokenAmount;
-    return total + Number(tokenAmount.uiAmountString ?? tokenAmount.uiAmount ?? 0);
-  }, 0);
+  const rawAmount = tokenAccounts.value.reduce(
+    (total, account) => total + readTokenAccountAmount(account.account.data),
+    BigInt(0)
+  );
+  const uiAmount = Number(rawAmount) / Math.pow(10, decimals);
 
   return formatTokenBalance(uiAmount);
 }
@@ -816,6 +835,8 @@ export function SwapCard({
   );
 
   const handleSwapTokens = useCallback(() => {
+    if (!BUY_TOKEN_SELECTION_ENABLED) return;
+
     const nextSellMint = buyMint;
     const nextBuyMint = sellMint;
     setSellMint(nextSellMint);
@@ -836,10 +857,12 @@ export function SwapCard({
 
       if (modalSide === "sell") {
         if (token.address === buyMint) {
+          if (!BUY_TOKEN_SELECTION_ENABLED) return;
           nextBuyMint = sellMint;
         }
         nextSellMint = token.address;
       } else {
+        if (!BUY_TOKEN_SELECTION_ENABLED) return;
         if (token.address === sellMint) {
           nextSellMint = buyMint;
         }
@@ -873,10 +896,16 @@ export function SwapCard({
       const pastedToken = findTokenByMint(pastedMint, tokens);
       if (!pastedToken) return;
 
-      let nextSellMint = sellMint;
-      let nextBuyMint = pastedToken.address;
+      let nextSellMint = BUY_TOKEN_SELECTION_ENABLED
+        ? sellMint
+        : pastedToken.address;
+      const nextBuyMint = BUY_TOKEN_SELECTION_ENABLED
+        ? pastedToken.address
+        : buyMint;
 
-      if (pastedToken.address === sellMint) {
+      if (nextSellMint === nextBuyMint) return;
+
+      if (BUY_TOKEN_SELECTION_ENABLED && pastedToken.address === sellMint) {
         nextSellMint = buyMint;
       }
 
@@ -1054,9 +1083,18 @@ export function SwapCard({
           <div className="flex items-center justify-center -my-2 relative z-10">
             <button
               onClick={handleSwapTokens}
-              className="w-9 h-9 rounded-full bg-[var(--surface-container)] border-2 border-border flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-foreground/50 transition-all group cursor-pointer"
+              disabled={!BUY_TOKEN_SELECTION_ENABLED}
+              className={`w-9 h-9 rounded-full bg-[var(--surface-container)] border-2 border-border flex items-center justify-center text-muted-foreground transition-all group ${
+                BUY_TOKEN_SELECTION_ENABLED
+                  ? "hover:text-foreground hover:border-foreground/50 cursor-pointer"
+                  : "cursor-not-allowed opacity-60"
+              }`}
             >
-              <ArrowDownUp className="w-3.5 h-3.5 group-hover:rotate-180 transition-transform duration-300" />
+              <ArrowDownUp
+                className={`w-3.5 h-3.5 transition-transform duration-300 ${
+                  BUY_TOKEN_SELECTION_ENABLED ? "group-hover:rotate-180" : ""
+                }`}
+              />
             </button>
           </div>
 
@@ -1068,6 +1106,7 @@ export function SwapCard({
                 <TokenSelector
                   token={buyToken}
                   onClick={() => setModalSide("buy")}
+                  disabled={!BUY_TOKEN_SELECTION_ENABLED}
                 />
                 <div className="text-right">
                   {status === "quoting" ? (
@@ -1359,14 +1398,19 @@ export function SwapCard({
 function TokenSelector({
   token,
   onClick,
+  disabled = false,
 }: {
   token: AggregatorToken;
   onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
-      className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-accent/60 hover:bg-accent transition-colors cursor-pointer"
+      disabled={disabled}
+      className={`flex items-center gap-2.5 px-3 py-2 rounded-xl bg-accent/60 transition-colors ${
+        disabled ? "cursor-not-allowed" : "hover:bg-accent cursor-pointer"
+      }`}
     >
       {token.logoURI ? (
         <img
@@ -1383,7 +1427,9 @@ function TokenSelector({
       <span className="text-foreground font-semibold text-sm">
         {token.symbol}
       </span>
-      <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+      {disabled ? null : (
+        <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+      )}
     </button>
   );
 }

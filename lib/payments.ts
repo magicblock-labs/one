@@ -53,6 +53,8 @@ export const PAYMENTS_DEFAULT_USDC_MINT =
   configuredPaymentsTestUsdcMint || USDC_MINT;
 
 export const PAYMENTS_ENDPOINTS = {
+  deposit: "/v1/spl/deposit",
+  withdraw: "/v1/spl/withdraw",
   initializeMint: "/v1/spl/initialize-mint",
   isMintInitialized: "/v1/spl/is-mint-initialized",
   splTransfer: "/v1/spl/transfer",
