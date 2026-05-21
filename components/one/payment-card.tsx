@@ -11,7 +11,6 @@ import {
   Shield,
   ShieldCheck,
   User,
-  Copy,
   AlertTriangle,
 } from "lucide-react";
 import { useConnection } from "@solana/wallet-adapter-react";
@@ -273,7 +272,9 @@ export function PaymentCard() {
   const [maxDelayMs, setMaxDelayMs] = useState(() => initialMaxDelayMs);
   const [split, setSplit] = useState(() => initialSplit);
   const [exactOut, setExactOut] = useState(true);
-  const [advancedOpen, setAdvancedOpen] = useState(() => initialGasless);
+  const [advancedOpen, setAdvancedOpen] = useState(
+    () => initialGasless || Boolean(searchParams.get("memo"))
+  );
   const [modalOpen, setModalOpen] = useState(false);
   const [resolvedDomainAddress, setResolvedDomainAddress] = useState<string | null>(null);
   const [recipientPrimaryDomain, setRecipientPrimaryDomain] = useState<string | null>(null);
@@ -291,7 +292,6 @@ export function PaymentCard() {
   const [status, setStatus] = useState<PaymentStatus>("idle");
   const [txSignature, setTxSignature] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const gaslessAutoOptOutRef = useRef(false);
 
   const { tokens } = useAggregatorTokens();
@@ -737,14 +737,6 @@ export function PaymentCard() {
     [resetResultState]
   );
 
-  const handleCopyAddress = useCallback(() => {
-    if (publicKey) {
-      navigator.clipboard.writeText(publicKey.toBase58());
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  }, [publicKey]);
-
   const handleDelayRangeChange = useCallback(
     (values: number[]) => {
       const [nextMin = 0, nextMax = nextMin] = values;
@@ -1067,23 +1059,6 @@ export function PaymentCard() {
             </div>
           </div>
 
-          {/* Memo (optional) */}
-          <div className="mx-3 mt-2">
-            <div className="rounded-xl bg-[var(--surface-inner)] border border-border/30 px-4 py-3">
-              <input
-                type="text"
-                value={memo}
-                onChange={(e) => {
-                  setMemo(e.target.value);
-                  resetResultState();
-                }}
-                placeholder="Add a memo (optional)"
-                maxLength={140}
-                className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground/40 outline-none"
-              />
-            </div>
-          </div>
-
           {/* Private Transfer Toggle */}
           <div className="mx-3 mt-2">
             <PrivateRoutingControls
@@ -1127,6 +1102,29 @@ export function PaymentCard() {
                   id="advanced-settings-panel"
                   className="border-t border-border/40 px-4 py-3 space-y-4"
                 >
+                  {/* Memo (optional) */}
+                  <div className="space-y-2">
+                    <label
+                      htmlFor="payment-memo"
+                      className="text-xs font-medium text-foreground"
+                    >
+                      Memo
+                    </label>
+                    <input
+                      id="payment-memo"
+                      type="text"
+                      value={memo}
+                      onChange={(e) => {
+                        setMemo(e.target.value);
+                        resetResultState();
+                      }}
+                      placeholder="Add a memo (optional)"
+                      maxLength={140}
+                      autoComplete="off"
+                      className="min-h-10 w-full rounded-lg border border-border/30 bg-[var(--surface-inner)] px-3 text-sm text-foreground placeholder:text-muted-foreground/40 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                  </div>
+
                   {/* Exact Out */}
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
@@ -1201,30 +1199,6 @@ export function PaymentCard() {
               )}
             </div>
           </div>
-
-          {/* Your address */}
-          {
-            connected && publicKey && (
-              <div className="mx-3 mt-2 flex items-center justify-between px-4 py-2.5 rounded-xl bg-secondary/30">
-                <div className="text-xs text-muted-foreground">
-                  Sending from{" "}
-                  <span className="font-mono text-foreground/70">
-                    {publicKey.toBase58().slice(0, 4)}...{publicKey.toBase58().slice(-4)}
-                  </span>
-                </div>
-                <button
-                  onClick={handleCopyAddress}
-                  className="p-1 rounded-md hover:bg-accent transition-colors cursor-pointer"
-                >
-                  {copied ? (
-                    <Check className="w-3 h-3 text-success" />
-                  ) : (
-                    <Copy className="w-3 h-3 text-muted-foreground" />
-                  )}
-                </button>
-              </div>
-            )
-          }
 
           {/* Error */}
           {
