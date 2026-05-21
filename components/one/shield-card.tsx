@@ -154,7 +154,7 @@ function getInitialShieldAmount(searchParams: ReadonlyURLSearchParams) {
 
 function getInitialShieldMint(searchParams: ReadonlyURLSearchParams) {
   const mint = searchParams.get(SHIELD_MINT_QUERY_PARAM)?.trim();
-  if (!mint || mint === SOL_MINT) return PAYMENTS_DEFAULT_USDC_MINT;
+  if (!mint) return PAYMENTS_DEFAULT_USDC_MINT;
 
   try {
     new PublicKey(mint);
@@ -388,13 +388,11 @@ export function ShieldCard() {
     });
   }, [amount, pathname, router, searchParams, tokenMint]);
 
-  const subscribeOnceToWalletAtaChange = useCallback(() => {
-    if (!publicKey || tokenMint === SOL_MINT) return;
+  const subscribeOnceToWalletBalanceChange = useCallback(() => {
+    if (!publicKey) return;
 
     balanceChangeUnsubscribeRef.current?.();
 
-    const mint = new PublicKey(tokenMint);
-    const atas = getAssociatedTokenAccounts(publicKey, mint);
     const subscriptionIds: number[] = [];
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let closed = false;
@@ -418,19 +416,24 @@ export function ShieldCard() {
 
     const onAccountChange = () => {
       if (closed) return;
-      refreshBalances();
+      dispatchPrivateBalanceRefresh();
       unsubscribe();
     };
 
-    atas.forEach((ata) => {
+    const accounts =
+      tokenMint === SOL_MINT
+        ? [publicKey]
+        : getAssociatedTokenAccounts(publicKey, new PublicKey(tokenMint));
+
+    accounts.forEach((account) => {
       subscriptionIds.push(
-        connection.onAccountChange(ata, onAccountChange, "confirmed")
+        connection.onAccountChange(account, onAccountChange, "confirmed")
       );
     });
 
     timeoutId = setTimeout(unsubscribe, 30_000);
     balanceChangeUnsubscribeRef.current = unsubscribe;
-  }, [connection, publicKey, refreshBalances, tokenMint]);
+  }, [connection, publicKey, tokenMint]);
 
   useEffect(() => {
     if (!owner) {
@@ -481,15 +484,13 @@ export function ShieldCard() {
   }, [owner, authToken, loadPrivateBalance, status]);
 
   useEffect(() => {
-    if (!authToken) return;
-
     const onRefresh = () => {
-      void loadPrivateBalance(authToken);
+      refreshBalances();
     };
     window.addEventListener(PRIVATE_BALANCE_REFRESH_EVENT, onRefresh);
     return () =>
       window.removeEventListener(PRIVATE_BALANCE_REFRESH_EVENT, onRefresh);
-  }, [authToken, loadPrivateBalance]);
+  }, [refreshBalances]);
 
   const signAndSendUnsignedTransaction = useCallback(
     async (
@@ -513,6 +514,7 @@ export function ShieldCard() {
       );
       const signedTransaction = await signTransaction(transaction);
 
+      subscribeOnceToWalletBalanceChange();
       onBeforeSend?.();
 
       const signature = await connection.sendRawTransaction(
@@ -522,8 +524,6 @@ export function ShieldCard() {
           maxRetries: 10,
         }
       );
-
-      subscribeOnceToWalletAtaChange();
 
       const confirmation = await connection.confirmTransaction(
         {
@@ -545,7 +545,7 @@ export function ShieldCard() {
       signTransaction,
       connected,
       connection,
-      subscribeOnceToWalletAtaChange,
+      subscribeOnceToWalletBalanceChange,
     ]
   );
 
@@ -583,7 +583,6 @@ export function ShieldCard() {
 
   const handleTokenSelect = useCallback(
     (token: AggregatorToken) => {
-      if (token.address === SOL_MINT) return;
       setTokenMint(token.address);
       resetResultState();
     },
@@ -596,11 +595,6 @@ export function ShieldCard() {
 
       if (!connected || !publicKey || !signTransaction) {
         openConnectModal();
-        return;
-      }
-
-      if (tokenMint === SOL_MINT) {
-        setAmountError("Shield supports SPL tokens. Select USDC or another SPL token.");
         return;
       }
 
@@ -718,7 +712,7 @@ export function ShieldCard() {
   const sourceBalanceLabel =
     mode === "shield" ? walletBalanceLabel : privateBalanceLabel;
   const destinationLabel =
-    mode === "shield" ? "Current private balance" : "Current wallet balance";
+    mode === "shield" ? "Current shielded balance" : "Current wallet balance";
   const destinationBalanceLabel =
     mode === "shield" ? privateBalanceLabel : walletBalanceLabel;
   const needsPrivateBalance =
@@ -923,7 +917,6 @@ export function ShieldCard() {
         open={modalOpen}
         onOpenChange={setModalOpen}
         onSelect={handleTokenSelect}
-        disabledMint={SOL_MINT}
       />
     </>
   );

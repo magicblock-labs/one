@@ -95,7 +95,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
           {
             error:
-              "Private swaps require destination, minDelayMs, maxDelayMs, and split",
+              "Shielded swaps require destination, minDelayMs, maxDelayMs, and split",
           },
           { status: 400 }
         );

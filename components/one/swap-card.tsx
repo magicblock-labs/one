@@ -1139,7 +1139,7 @@ export function SwapCard({
           <div className="mx-3 mt-2">
             <PrivateRoutingControls
               id="private-swap-toggle"
-              label="Private swap"
+              label="Shielded swap"
               compact
               enabled={isPrivate}
               onEnabledChange={(enabled) => {
@@ -1148,7 +1148,7 @@ export function SwapCard({
                 updateSwapUrl({ isPrivate: enabled });
               }}
               summary={routingSummary}
-              disabledDescription="Send swap output through MagicBlock private routing"
+              disabledDescription="Send swap output through MagicBlock shielded routing"
               minDelayMs={minDelayMs}
               maxDelayMs={maxDelayMs}
               onDelayRangeChange={handleDelayRangeChange}
@@ -1307,7 +1307,7 @@ export function SwapCard({
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="text-sm font-medium text-foreground">
-                        Private payments are not enabled for this mint yet.
+                        Shielded payments are not enabled for this mint yet.
                       </div>
                       <p className="mt-1 text-xs leading-5 text-muted-foreground">
                         Pay the fees (~0.2 SOL) and set it up permissionlessly.

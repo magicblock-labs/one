@@ -7,7 +7,6 @@ import {
   Send,
   Shield as ShieldIcon,
   QrCode,
-  X,
 } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { SwapCard } from "./swap-card";
@@ -45,6 +44,8 @@ const PAYMENT_QUERY_PARAMS = [
   "min",
   "max",
   "split",
+  "fromBalance",
+  "toBalance",
 ] as const;
 const REQUEST_QUERY_PARAMS = ["prd", "ramt", "rmint"] as const;
 const SHIELD_QUERY_PARAMS = ["shamt", "shmint"] as const;
@@ -87,6 +88,8 @@ export function TradeHub({
       searchParams.get("min") ||
       searchParams.get("max") ||
       searchParams.get("split") ||
+      searchParams.get("fromBalance") ||
+      searchParams.get("toBalance") ||
       searchParams.has("public")
   );
   const hasRequestSelection = Boolean(
@@ -120,29 +123,8 @@ export function TradeHub({
               ? "swap"
               : "payment"
   );
-  const [noticeDismissed, setNoticeDismissed] = useState(false);
-
-  useEffect(() => {
-    try {
-      if (window.localStorage.getItem("private-payments-beta-dismissed") === "1") {
-        setNoticeDismissed(true);
-      }
-    } catch {
-      // ignore storage access errors (private mode, etc.)
-    }
-  }, []);
-
-  const dismissPrivatePaymentsNotice = useCallback(() => {
-    setNoticeDismissed(true);
-    try {
-      window.localStorage.setItem("private-payments-beta-dismissed", "1");
-    } catch {
-      // ignore
-    }
-  }, []);
-
   const showPrivatePaymentsNotice =
-    activeTop === "payment" && !searchParams.has("public") && !noticeDismissed;
+    activeTop === "payment" && !searchParams.has("public");
 
   useEffect(() => {
     if (selectableUrlTab) {
@@ -226,29 +208,21 @@ export function TradeHub({
     <div className="w-full max-w-[480px] mx-auto">
       {showPrivatePaymentsNotice && (
         <div className="mb-4 w-full sm:fixed sm:bottom-4 sm:right-4 sm:left-auto sm:z-30 sm:mb-0 sm:w-[calc(100vw-2rem)] sm:max-w-xs">
-          <div className="relative rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-4 py-3 pr-9 shadow-lg shadow-black/20 backdrop-blur-md">
+          <div className="relative rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-4 py-3 shadow-lg shadow-black/20 backdrop-blur-md">
             <div className="flex items-start gap-2.5">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-400" />
               <div className="min-w-0">
                 <div className="text-xs font-medium text-foreground">
-                  Private payments beta
+                  Shielded payments beta
                 </div>
                 <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                  The private payments API is in beta and currently
+                  The shielded payments API is in beta and currently
                   undergoing a security audit. It is suitable for testing and
                   pilot integrations while full production rollout is still in
                   progress.
                 </div>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={dismissPrivatePaymentsNotice}
-              aria-label="Dismiss private payments beta notice"
-              className="absolute right-2 top-2 rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground cursor-pointer"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
           </div>
         </div>
       )}

@@ -162,7 +162,7 @@ export function NetWorthPanel() {
           aria-live="polite"
         >
           <p className="text-xs text-center text-muted-foreground">
-            Authenticate to load private balances.
+            Authenticate to load shielded balances.
           </p>
           {!signMessage ? (
             <p className="text-xs text-center text-destructive">
@@ -188,7 +188,7 @@ export function NetWorthPanel() {
         </div>
       ) : (
         <div className="space-y-3">
-          <div className="text-xs text-muted-foreground">Private Balance</div>
+          <div className="text-xs text-muted-foreground">Shielded Balance</div>
 
           {displayRows.map(({ mint, symbol, logoURI, decimals }) => (
             <div key={mint} className="flex items-center justify-between">
