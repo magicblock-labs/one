@@ -57,13 +57,13 @@ export default async function Home({ searchParams }: HomeProps) {
       <Header />
 
       <main className="flex-1 relative z-10">
-        <NetWorthPanel />
-
         <div className="flex flex-col items-center px-4 pt-4 pb-10">
           {/* Subtitle */}
           <p className="text-sm text-muted-foreground mb-4">
             Onchain Payment Made Simple
           </p>
+
+          <NetWorthPanel />
 
           {/* Swap / Payment Section */}
           <TradeHub

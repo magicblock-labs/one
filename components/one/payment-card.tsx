@@ -18,7 +18,7 @@ import { useConnection } from "@solana/wallet-adapter-react";
 import type { ReadonlyURLSearchParams } from "next/navigation";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
-  type Connection,
+  Connection,
   PublicKey,
   Transaction,
   VersionedTransaction,
@@ -89,6 +89,13 @@ interface UnsignedPaymentTransaction {
   validator?: string;
 }
 
+interface SignedPaymentTransactionResponse {
+  confirmationRequiresAuthToken?: boolean;
+  confirmationRpcEndpoint?: string;
+  error?: string;
+  signature?: string;
+}
+
 interface MintInitializationResponse {
   initialized: boolean;
 }
@@ -107,6 +114,16 @@ function base64ToUint8Array(base64: string) {
   }
 
   return bytes;
+}
+
+function uint8ArrayToBase64(bytes: Uint8Array) {
+  let binary = "";
+
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+
+  return globalThis.btoa(binary);
 }
 
 function deserializeUnsignedPaymentTransaction(
@@ -142,6 +159,18 @@ function deserializeUnsignedPaymentTransaction(
   throw new Error(
     `Unsupported transaction version: ${unsignedTransaction.version}`
   );
+}
+
+function preparePaymentTransactionForSigning(
+  transaction: Transaction | VersionedTransaction,
+  recentBlockhash: string
+) {
+  if (transaction instanceof VersionedTransaction) {
+    transaction.message.recentBlockhash = recentBlockhash;
+    return;
+  }
+
+  transaction.recentBlockhash = recentBlockhash;
 }
 
 function decimalAmountToBaseUnits(value: string, decimals: number) {
@@ -238,6 +267,19 @@ function getErrorTransactionLabel(message: string | null) {
   }
 
   return "Transaction failed on-chain";
+}
+
+function getExplorerTransactionHref(
+  signature: string,
+  customRpcEndpoint?: string | null
+) {
+  const params = new URLSearchParams({ signature });
+
+  if (customRpcEndpoint) {
+    params.set("customUrl", customRpcEndpoint);
+  }
+
+  return `/api/explorer/tx?${params.toString()}`;
 }
 
 function formatTokenBalance(value: number) {
@@ -377,6 +419,9 @@ export function PaymentCard() {
 
   const [status, setStatus] = useState<PaymentStatus>("idle");
   const [txSignature, setTxSignature] = useState<string | null>(null);
+  const [txExplorerRpcEndpoint, setTxExplorerRpcEndpoint] = useState<
+    string | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const gaslessAutoOptOutRef = useRef(false);
 
@@ -434,6 +479,7 @@ export function PaymentCard() {
     });
     setError(null);
     setTxSignature(null);
+    setTxExplorerRpcEndpoint(null);
   }, []);
 
   useEffect(() => {
@@ -1022,7 +1068,8 @@ export function PaymentCard() {
   const signAndSendUnsignedTransaction = useCallback(
     async (
       unsignedTransaction: UnsignedPaymentTransaction,
-      onBeforeSend?: () => void
+      onBeforeSend?: () => void,
+      options?: { authToken?: string | null; submitViaPaymentsApi?: boolean }
     ) => {
       if (!publicKey || !signTransaction || !connected) {
         throw new Error("Wallet not connected");
@@ -1032,10 +1079,83 @@ export function PaymentCard() {
         throw new Error("Wallet is not listed as a required signer");
       }
 
+      const shouldSubmitViaPaymentsApi =
+        options?.submitViaPaymentsApi ||
+        unsignedTransaction.sendTo === "ephemeral";
       const transaction = deserializeUnsignedPaymentTransaction(unsignedTransaction);
+      if (shouldSubmitViaPaymentsApi) {
+        preparePaymentTransactionForSigning(
+          transaction,
+          unsignedTransaction.recentBlockhash
+        );
+      }
       const signedTransaction = await signTransaction(transaction);
 
       onBeforeSend?.();
+
+      if (shouldSubmitViaPaymentsApi) {
+        const signedTransactionBase64 = uint8ArrayToBase64(
+          signedTransaction.serialize()
+        );
+        const sendRes = await fetch("/api/payments/transaction/send", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(options?.authToken
+              ? { Authorization: `Bearer ${options.authToken}` }
+              : {}),
+          },
+          body: JSON.stringify({
+            transactionBase64: signedTransactionBase64,
+            sendTo: unsignedTransaction.sendTo,
+          }),
+        });
+
+        const sendJson = (await sendRes.json().catch(
+          () => ({})
+        )) as SignedPaymentTransactionResponse;
+        if (!sendRes.ok) {
+          throw new Error(
+            sendJson.error ? sendJson.error : `Send failed: ${sendRes.status}`
+          );
+        }
+        if (!sendJson.signature) {
+          throw new Error("Send response did not include a signature");
+        }
+        if (!sendJson.confirmationRpcEndpoint) {
+          throw new Error("Send response did not include a confirmation RPC endpoint");
+        }
+
+        setTxSignature(sendJson.signature);
+        setTxExplorerRpcEndpoint(sendJson.confirmationRpcEndpoint);
+        const confirmationConnection = new Connection(
+          sendJson.confirmationRpcEndpoint,
+          {
+            commitment: "confirmed",
+            ...(sendJson.confirmationRequiresAuthToken && options?.authToken
+              ? {
+                  httpHeaders: {
+                    Authorization: `Bearer ${options.authToken}`,
+                  },
+                }
+              : {}),
+          }
+        );
+        const confirmation = await confirmationConnection.confirmTransaction(
+          {
+            signature: sendJson.signature,
+            blockhash: unsignedTransaction.recentBlockhash,
+            lastValidBlockHeight: unsignedTransaction.lastValidBlockHeight,
+          },
+          "confirmed"
+        );
+
+        if (confirmation.value.err) {
+          throw new Error(`Transaction failed on-chain: ${sendJson.signature}`);
+        }
+
+        return sendJson.signature;
+      }
 
       const signature = await connection.sendRawTransaction(
         signedTransaction.serialize(),
@@ -1045,6 +1165,7 @@ export function PaymentCard() {
         }
       );
       setTxSignature(signature);
+      setTxExplorerRpcEndpoint(null);
 
       const confirmation = await connection.confirmTransaction(
         {
@@ -1116,6 +1237,7 @@ export function PaymentCard() {
     setStatus("building");
     setError(null);
     setTxSignature(null);
+    setTxExplorerRpcEndpoint(null);
 
     try {
       const buildRes = await fetch("/api/payments/transfer", {
@@ -1164,7 +1286,11 @@ export function PaymentCard() {
       setStatus("signing");
       const signature = await signAndSendUnsignedTransaction(
         unsignedTransaction,
-        () => setStatus("sending")
+        () => setStatus("sending"),
+        {
+          authToken: privateAuthToken,
+          submitViaPaymentsApi: sourceBalance === "ephemeral",
+        }
       );
       setTxSignature(signature);
       setStatus("confirmed");
@@ -1204,6 +1330,7 @@ export function PaymentCard() {
   const handleReset = useCallback(() => {
     setStatus("idle");
     setTxSignature(null);
+    setTxExplorerRpcEndpoint(null);
     setError(null);
     setAmount("");
     setMemo("");
@@ -1640,7 +1767,10 @@ export function PaymentCard() {
               <div className="mx-3 mt-2 flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/20">
                 {errorTransactionSignature ? (
                   <a
-                    href={`/api/explorer/tx?signature=${encodeURIComponent(errorTransactionSignature)}`}
+                    href={getExplorerTransactionHref(
+                      errorTransactionSignature,
+                      txExplorerRpcEndpoint
+                    )}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="min-w-0 inline-flex items-center gap-1 text-xs text-destructive hover:underline"
@@ -1656,7 +1786,10 @@ export function PaymentCard() {
                 )}
                 {errorTxSignature && !errorTransactionSignature && (
                   <a
-                    href={`/api/explorer/tx?signature=${encodeURIComponent(errorTxSignature)}`}
+                    href={getExplorerTransactionHref(
+                      errorTxSignature,
+                      txExplorerRpcEndpoint
+                    )}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="shrink-0 flex items-center gap-1 text-xs text-destructive hover:underline"
@@ -1713,7 +1846,10 @@ export function PaymentCard() {
                   <span className="text-xs text-success">Payment sent!</span>
                 </div>
                 <a
-                  href={`/api/explorer/tx?signature=${encodeURIComponent(txSignature)}`}
+                  href={getExplorerTransactionHref(
+                    txSignature,
+                    txExplorerRpcEndpoint
+                  )}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-1 text-xs text-success hover:underline"

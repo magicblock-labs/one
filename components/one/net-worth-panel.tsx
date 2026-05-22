@@ -155,66 +155,95 @@ export function NetWorthPanel() {
   };
 
   return (
-    <div className="hidden xl:block fixed top-20 right-4 w-[220px] rounded-2xl bg-[var(--surface-container)] border border-border/40 p-4 shadow-lg shadow-black/20">
-      {needsAuthOverlay ? (
+    <>
+      {needsAuthOverlay && (
         <div
-          className="inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-2xl"
+          className="mb-4 flex w-full justify-center xl:hidden"
           aria-live="polite"
         >
-          <p className="text-xs text-center text-muted-foreground">
-            Authenticate to load shielded balances.
-          </p>
           {!signMessage ? (
-            <p className="text-xs text-center text-destructive">
-              This wallet does not support message signing.
+            <p className="text-xs text-destructive">
+              Message signing unavailable
             </p>
           ) : (
-            <>
+            <div className="flex flex-col items-center gap-2">
               <button
                 type="button"
                 onClick={() => void handleAuthenticate()}
                 disabled={authBusy}
-                className="w-full py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50"
+                className="inline-flex min-h-10 w-48 items-center justify-center rounded-xl bg-primary px-6 text-sm font-medium text-primary-foreground shadow-md shadow-black/20 transition-all hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {authBusy ? "Signing…" : "Authenticate"}
+                {authBusy ? "Signing..." : "Authenticate"}
               </button>
               {authError && (
-                <p className="text-xs text-center text-destructive">
-                  {authError}
-                </p>
+                <p className="text-xs text-destructive">{authError}</p>
               )}
-            </>
-          )}
-        </div>
-      ) : (
-        <div className="space-y-3">
-          <div className="text-xs text-muted-foreground">Shielded Balance</div>
-
-          {displayRows.map(({ mint, symbol, logoURI, decimals }) => (
-            <div key={mint} className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                {logoURI ? (
-                  <img src={logoURI} alt="" className="w-5 h-5 rounded-full" />
-                ) : (
-                  <div className="w-5 h-5 rounded-full bg-muted flex items-center justify-center text-[10px] font-semibold text-muted-foreground">
-                    {symbol.charAt(0)}
-                  </div>
-                )}
-                <span className="text-sm font-medium text-foreground">
-                  {symbol}
-                </span>
-              </div>
-              <span className="text-sm text-foreground tabular-nums">
-                {balanceLabel(mint, decimals)}
-              </span>
             </div>
-          ))}
-
-          {balanceError && (
-            <p className="text-xs text-destructive">{balanceError}</p>
           )}
         </div>
       )}
-    </div>
+
+      <div className="hidden xl:block fixed top-20 right-4 w-[220px] rounded-2xl bg-[var(--surface-container)] border border-border/40 p-4 shadow-lg shadow-black/20">
+        {needsAuthOverlay ? (
+          <div
+            className="inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-2xl"
+            aria-live="polite"
+          >
+            <p className="text-xs text-center text-muted-foreground">
+              Authenticate to load shielded balances.
+            </p>
+            {!signMessage ? (
+              <p className="text-xs text-center text-destructive">
+                This wallet does not support message signing.
+              </p>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void handleAuthenticate()}
+                  disabled={authBusy}
+                  className="w-full py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50"
+                >
+                  {authBusy ? "Signing…" : "Authenticate"}
+                </button>
+                {authError && (
+                  <p className="text-xs text-center text-destructive">
+                    {authError}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="text-xs text-muted-foreground">Shielded Balance</div>
+
+            {displayRows.map(({ mint, symbol, logoURI, decimals }) => (
+              <div key={mint} className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {logoURI ? (
+                    <img src={logoURI} alt="" className="w-5 h-5 rounded-full" />
+                  ) : (
+                    <div className="w-5 h-5 rounded-full bg-muted flex items-center justify-center text-[10px] font-semibold text-muted-foreground">
+                      {symbol.charAt(0)}
+                    </div>
+                  )}
+                  <span className="text-sm font-medium text-foreground">
+                    {symbol}
+                  </span>
+                </div>
+                <span className="text-sm text-foreground tabular-nums">
+                  {balanceLabel(mint, decimals)}
+                </span>
+              </div>
+            ))}
+
+            {balanceError && (
+              <p className="text-xs text-destructive">{balanceError}</p>
+            )}
+          </div>
+        )}
+      </div>
+    </>
   );
 }

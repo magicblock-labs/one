@@ -164,6 +164,37 @@ function getInitialShieldMint(searchParams: ReadonlyURLSearchParams) {
   }
 }
 
+function shortenAddress(value: string) {
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
+function getErrorTransactionSignature(message: string | null) {
+  if (!message) return null;
+
+  const failedMatch = message.match(
+    /^Transaction failed on-chain:\s*([1-9A-HJ-NP-Za-km-z]{64,})/
+  );
+  if (failedMatch) return failedMatch[1];
+
+  const expiredMatch = message.match(
+    /^Signature\s+([1-9A-HJ-NP-Za-km-z]{64,})\s+has expired:/
+  );
+  if (expiredMatch) return expiredMatch[1];
+
+  return null;
+}
+
+function getErrorTransactionLabel(message: string | null) {
+  const expiredMatch = message?.match(
+    /^Signature\s+[1-9A-HJ-NP-Za-km-z]{64,}\s+has expired:\s*(.+)$/
+  );
+  if (expiredMatch) {
+    return `Signature expired: ${expiredMatch[1]}`;
+  }
+
+  return "Transaction failed on-chain";
+}
+
 function getAssociatedTokenAccounts(owner: PublicKey, mint: PublicKey) {
   return TOKEN_PROGRAM_IDS.map(
     (tokenProgramId) =>
@@ -727,6 +758,8 @@ export function ShieldCard() {
       Boolean(amountError) ||
       !amount.trim()
     : false;
+  const errorTransactionSignature = getErrorTransactionSignature(error);
+  const errorTxSignature = txSignature ?? errorTransactionSignature;
 
   return (
     <>
@@ -872,8 +905,34 @@ export function ShieldCard() {
             )}
 
             {error && (
-              <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
-                {error}
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+                {errorTransactionSignature ? (
+                  <a
+                    href={`/api/explorer/tx?signature=${encodeURIComponent(errorTransactionSignature)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="min-w-0 inline-flex items-center gap-1 hover:underline"
+                  >
+                    <span>{getErrorTransactionLabel(error)}:</span>
+                    <span className="font-mono">
+                      {shortenAddress(errorTransactionSignature)}
+                    </span>
+                    <ExternalLink className="h-3 w-3 shrink-0" />
+                  </a>
+                ) : (
+                  <span>{error}</span>
+                )}
+                {errorTxSignature && !errorTransactionSignature && (
+                  <a
+                    href={`/api/explorer/tx?signature=${encodeURIComponent(errorTxSignature)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="shrink-0 inline-flex items-center gap-1 hover:underline"
+                  >
+                    View tx
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
               </div>
             )}
 

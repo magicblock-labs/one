@@ -229,7 +229,7 @@ export function Header() {
 
         {/* Developer API */}
         <a
-          href="https://payments.magicblock.app/"
+          href="https://api.magicblock.app/"
           target="_blank"
           rel="noopener noreferrer"
           className="hidden cursor-pointer items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground sm:flex"
@@ -272,7 +272,7 @@ export function Header() {
             </DropdownMenuItem>
             <DropdownMenuItem asChild className="cursor-pointer gap-2.5">
               <a
-                href="https://payments.magicblock.app/"
+                href="https://api.magicblock.app/"
                 target="_blank"
                 rel="noopener noreferrer"
               >

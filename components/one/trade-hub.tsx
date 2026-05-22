@@ -207,7 +207,7 @@ export function TradeHub({
   return (
     <div className="w-full max-w-[480px] mx-auto">
       {showPrivatePaymentsNotice && (
-        <div className="mb-4 w-full sm:fixed sm:bottom-4 sm:right-4 sm:left-auto sm:z-30 sm:mb-0 sm:w-[calc(100vw-2rem)] sm:max-w-xs">
+        <div className="hidden xl:block mb-4 w-full sm:fixed sm:bottom-4 sm:right-4 sm:left-auto sm:z-30 sm:mb-0 sm:w-[calc(100vw-2rem)] sm:max-w-xs">
           <div className="relative rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-4 py-3 shadow-lg shadow-black/20 backdrop-blur-md">
             <div className="flex items-start gap-2.5">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-400" />
@@ -287,6 +287,27 @@ export function TradeHub({
       {activeTop === "payment" && <PaymentCard />}
       {activeTop === "shield" && <ShieldCard />}
       {activeTop === "request" && <RequestCard />}
+
+      {showPrivatePaymentsNotice && (
+        <div className="mt-4 w-full xl:hidden">
+          <div className="relative rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-4 py-3 shadow-lg shadow-black/20 backdrop-blur-md">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-400" />
+              <div className="min-w-0">
+                <div className="text-xs font-medium text-foreground">
+                  Shielded payments beta
+                </div>
+                <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  The shielded payments API is in beta and currently
+                  undergoing a security audit. It is suitable for testing and
+                  pilot integrations while full production rollout is still in
+                  progress.
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
