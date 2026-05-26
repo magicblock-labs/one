@@ -35,6 +35,9 @@ export async function fetchSplChallenge(pubkeyBase58: string): Promise<string> {
   const params = new URLSearchParams({
     pubkey: pubkeyBase58,
   });
+  if (PAYMENTS_CLUSTER) {
+    params.set("cluster", PAYMENTS_CLUSTER);
+  }
   const res = await fetch(getPaymentsApiUrl(`/v1/spl/challenge?${params}`));
   if (!res.ok) {
     const text = await res.text();
@@ -57,7 +60,7 @@ export async function loginSplPrivate(params: {
       pubkey: params.pubkey,
       challenge: params.challenge,
       signature: params.signature,
-      cluster: PAYMENTS_CLUSTER,
+      ...(PAYMENTS_CLUSTER ? { cluster: PAYMENTS_CLUSTER } : {}),
     }),
   });
   if (!res.ok) {
@@ -93,8 +96,10 @@ export async function fetchPrivateBalance(
   const params = new URLSearchParams({
     address: owner,
     mint,
-    cluster: PAYMENTS_CLUSTER,
   });
+  if (PAYMENTS_CLUSTER) {
+    params.set("cluster", PAYMENTS_CLUSTER);
+  }
   const res = await fetch(
     getPaymentsApiUrl(`/v1/spl/private-balance?${params}`),
     { headers: { Authorization: `Bearer ${authToken}` } },

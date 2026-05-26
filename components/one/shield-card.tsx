@@ -13,6 +13,7 @@ import type { ReadonlyURLSearchParams } from "next/navigation";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useConnection } from "@solana/wallet-adapter-react";
 import {
+  type AccountInfo,
   type Connection,
   PublicKey,
   Transaction,
@@ -80,6 +81,8 @@ const TOKEN_PROGRAM_IDS = [
   new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
   new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
 ];
+const SHIELD_TOKEN_SELECTION_ENABLED = true;
+const SHIELD_BALANCE_RECHECK_DELAY_MS = 2_500;
 const SHIELD_AMOUNT_QUERY_PARAM = "shamt";
 const SHIELD_MINT_QUERY_PARAM = "shmint";
 const SPL_TOKEN_ACCOUNT_AMOUNT_OFFSET = 64;
@@ -153,6 +156,8 @@ function getInitialShieldAmount(searchParams: ReadonlyURLSearchParams) {
 }
 
 function getInitialShieldMint(searchParams: ReadonlyURLSearchParams) {
+  if (!SHIELD_TOKEN_SELECTION_ENABLED) return PAYMENTS_DEFAULT_USDC_MINT;
+
   const mint = searchParams.get(SHIELD_MINT_QUERY_PARAM)?.trim();
   if (!mint) return PAYMENTS_DEFAULT_USDC_MINT;
 
@@ -205,39 +210,40 @@ function getAssociatedTokenAccounts(owner: PublicKey, mint: PublicKey) {
   );
 }
 
+function readTokenAccountAmount(data: Uint8Array) {
+  if (
+    data.byteLength <
+    SPL_TOKEN_ACCOUNT_AMOUNT_OFFSET + SPL_TOKEN_ACCOUNT_AMOUNT_LENGTH
+  ) {
+    return BigInt(0);
+  }
+
+  return new DataView(
+    data.buffer,
+    data.byteOffset + SPL_TOKEN_ACCOUNT_AMOUNT_OFFSET,
+    SPL_TOKEN_ACCOUNT_AMOUNT_LENGTH
+  ).getBigUint64(0, true);
+}
+
 async function fetchTokenBalanceBaseUnits(
   connection: Connection,
   owner: PublicKey,
   tokenMint: string
 ) {
   if (tokenMint === SOL_MINT) {
-    const lamports = await connection.getBalance(owner, "confirmed");
+    const lamports = await connection.getBalance(owner, "processed");
     return String(lamports);
   }
 
   const tokenAccounts = await connection.getTokenAccountsByOwner(
     owner,
     { mint: new PublicKey(tokenMint) },
-    "confirmed"
+    "processed"
   );
 
   return tokenAccounts.value
     .reduce((total, account) => {
-      const data = account.account.data;
-      if (
-        data.byteLength <
-        SPL_TOKEN_ACCOUNT_AMOUNT_OFFSET + SPL_TOKEN_ACCOUNT_AMOUNT_LENGTH
-      ) {
-        return total;
-      }
-
-      const amount = new DataView(
-        data.buffer,
-        data.byteOffset + SPL_TOKEN_ACCOUNT_AMOUNT_OFFSET,
-        SPL_TOKEN_ACCOUNT_AMOUNT_LENGTH
-      ).getBigUint64(0, true);
-
-      return total + amount;
+      return total + readTokenAccountAmount(account.account.data);
     }, BigInt(0))
     .toString();
 }
@@ -301,7 +307,15 @@ export function ShieldCard() {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<ShieldStatus>("idle");
   const [txSignature, setTxSignature] = useState<string | null>(null);
+  const publicBalanceRequestIdRef = useRef(0);
+  const loadPublicBalanceRef = useRef<() => Promise<void>>(async () => {});
   const balanceChangeUnsubscribeRef = useRef<(() => void) | null>(null);
+  const publicBalanceRecheckTimeoutRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+  const privateBalanceRecheckTimeoutRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
 
   const defaultToken = useMemo(
     () => ({ ...FALLBACK_TOKENS[1], address: PAYMENTS_DEFAULT_USDC_MINT }),
@@ -326,6 +340,9 @@ export function ShieldCard() {
   }, [status]);
 
   const loadPublicBalance = useCallback(async () => {
+    const requestId = publicBalanceRequestIdRef.current + 1;
+    publicBalanceRequestIdRef.current = requestId;
+
     if (!publicKey) {
       setPublicBalanceRaw(null);
       setPublicBalanceError(null);
@@ -340,11 +357,14 @@ export function ShieldCard() {
         publicKey,
         tokenMint
       );
+      if (publicBalanceRequestIdRef.current !== requestId) return;
       setPublicBalanceRaw(raw);
     } catch {
+      if (publicBalanceRequestIdRef.current !== requestId) return;
       setPublicBalanceRaw(null);
       setPublicBalanceError("Failed to load wallet balance");
     } finally {
+      if (publicBalanceRequestIdRef.current !== requestId) return;
       setPublicBalanceLoading(false);
     }
   }, [connection, publicKey, tokenMint]);
@@ -376,12 +396,37 @@ export function ShieldCard() {
     [owner, tokenMint]
   );
 
-  const refreshBalances = useCallback(() => {
-    void loadPublicBalance();
+  const refreshPrivateBalance = useCallback(() => {
     if (authToken) {
       void loadPrivateBalance(authToken);
     }
-  }, [authToken, loadPrivateBalance, loadPublicBalance]);
+  }, [authToken, loadPrivateBalance]);
+
+  useEffect(() => {
+    loadPublicBalanceRef.current = loadPublicBalance;
+  }, [loadPublicBalance]);
+
+  const schedulePublicBalanceRecheck = useCallback(() => {
+    if (publicBalanceRecheckTimeoutRef.current) {
+      clearTimeout(publicBalanceRecheckTimeoutRef.current);
+    }
+
+    publicBalanceRecheckTimeoutRef.current = setTimeout(() => {
+      publicBalanceRecheckTimeoutRef.current = null;
+      void loadPublicBalanceRef.current();
+    }, SHIELD_BALANCE_RECHECK_DELAY_MS);
+  }, []);
+
+  const schedulePrivateBalanceRecheck = useCallback(() => {
+    if (privateBalanceRecheckTimeoutRef.current) {
+      clearTimeout(privateBalanceRecheckTimeoutRef.current);
+    }
+
+    privateBalanceRecheckTimeoutRef.current = setTimeout(() => {
+      privateBalanceRecheckTimeoutRef.current = null;
+      dispatchPrivateBalanceRefresh();
+    }, SHIELD_BALANCE_RECHECK_DELAY_MS);
+  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(searchParams.toString());
@@ -445,8 +490,16 @@ export function ShieldCard() {
       }
     };
 
-    const onAccountChange = () => {
+    const onAccountChange = (accountInfo: AccountInfo<Buffer>) => {
       if (closed) return;
+      publicBalanceRequestIdRef.current += 1;
+      setPublicBalanceError(null);
+      setPublicBalanceLoading(false);
+      setPublicBalanceRaw(
+        tokenMint === SOL_MINT
+          ? String(accountInfo.lamports)
+          : readTokenAccountAmount(accountInfo.data).toString()
+      );
       dispatchPrivateBalanceRefresh();
       unsubscribe();
     };
@@ -458,7 +511,7 @@ export function ShieldCard() {
 
     accounts.forEach((account) => {
       subscriptionIds.push(
-        connection.onAccountChange(account, onAccountChange, "confirmed")
+        connection.onAccountChange(account, onAccountChange, "processed")
       );
     });
 
@@ -491,6 +544,14 @@ export function ShieldCard() {
     return () => {
       balanceChangeUnsubscribeRef.current?.();
       balanceChangeUnsubscribeRef.current = null;
+      if (publicBalanceRecheckTimeoutRef.current) {
+        clearTimeout(publicBalanceRecheckTimeoutRef.current);
+        publicBalanceRecheckTimeoutRef.current = null;
+      }
+      if (privateBalanceRecheckTimeoutRef.current) {
+        clearTimeout(privateBalanceRecheckTimeoutRef.current);
+        privateBalanceRecheckTimeoutRef.current = null;
+      }
     };
   }, []);
 
@@ -516,12 +577,12 @@ export function ShieldCard() {
 
   useEffect(() => {
     const onRefresh = () => {
-      refreshBalances();
+      refreshPrivateBalance();
     };
     window.addEventListener(PRIVATE_BALANCE_REFRESH_EVENT, onRefresh);
     return () =>
       window.removeEventListener(PRIVATE_BALANCE_REFRESH_EVENT, onRefresh);
-  }, [refreshBalances]);
+  }, [refreshPrivateBalance]);
 
   const signAndSendUnsignedTransaction = useCallback(
     async (
@@ -614,6 +675,8 @@ export function ShieldCard() {
 
   const handleTokenSelect = useCallback(
     (token: AggregatorToken) => {
+      if (!SHIELD_TOKEN_SELECTION_ENABLED) return;
+
       setTokenMint(token.address);
       resetResultState();
     },
@@ -690,6 +753,12 @@ export function ShieldCard() {
         void loadPublicBalance();
         if (authToken) {
           void loadPrivateBalance(authToken);
+          if (mode === "shield") {
+            schedulePrivateBalanceRecheck();
+          }
+        }
+        if (mode === "unshield") {
+          schedulePublicBalanceRecheck();
         }
       } catch (e) {
         const message = e instanceof Error ? e.message : "Shield action failed";
@@ -710,6 +779,8 @@ export function ShieldCard() {
       mode,
       openConnectModal,
       publicKey,
+      schedulePublicBalanceRecheck,
+      schedulePrivateBalanceRecheck,
       selectedToken.decimals,
       signAndSendUnsignedTransaction,
       signTransaction,
@@ -804,7 +875,11 @@ export function ShieldCard() {
                 <div>
                   <button
                     type="button"
-                    onClick={() => setModalOpen(true)}
+                    onClick={() => {
+                      if (SHIELD_TOKEN_SELECTION_ENABLED) {
+                        setModalOpen(true);
+                      }
+                    }}
                     disabled={isBusy}
                     className="flex min-h-10 items-center gap-2.5 rounded-xl bg-accent/60 px-3 py-2 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -823,7 +898,9 @@ export function ShieldCard() {
                     <span className="text-sm font-semibold text-foreground">
                       {selectedToken.symbol}
                     </span>
-                    <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+                    {SHIELD_TOKEN_SELECTION_ENABLED && (
+                      <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+                    )}
                   </button>
                   <div className="mt-1 px-1 text-xs text-muted-foreground">
                     Balance: {sourceBalanceLabel}
@@ -973,8 +1050,12 @@ export function ShieldCard() {
       </div>
 
       <TokenSelectModal
-        open={modalOpen}
-        onOpenChange={setModalOpen}
+        open={SHIELD_TOKEN_SELECTION_ENABLED && modalOpen}
+        onOpenChange={(open) => {
+          if (SHIELD_TOKEN_SELECTION_ENABLED) {
+            setModalOpen(open);
+          }
+        }}
         onSelect={handleTokenSelect}
       />
     </>

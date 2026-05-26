@@ -1435,7 +1435,8 @@ export function PaymentCard() {
                   {/* Temporary: restore onClick, hover styles, and ChevronDown below to re-enable token selection. */}
                   <button
                     disabled
-                    className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-accent/60 transition-colors cursor-default"
+                    className="flex items-center gap-2.5 px-3
+                     py-2 rounded-xl bg-accent/60 transition-colors cursor-default"
                   >
                     {selectedToken.logoURI ? (
                       <img
