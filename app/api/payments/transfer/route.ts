@@ -13,6 +13,9 @@ interface PaymentTransferBuildRequest {
   mint?: string;
   amount?: string;
   visibility?: "public" | "private";
+  fromBalance?: "base" | "ephemeral";
+  toBalance?: "base" | "ephemeral";
+  authToken?: string;
   gasless?: boolean;
   memo?: string;
   exactOut?: boolean;
@@ -32,6 +35,9 @@ export async function POST(request: NextRequest) {
       mint,
       amount,
       visibility,
+      fromBalance,
+      toBalance,
+      authToken,
       gasless,
       memo,
       exactOut,
@@ -45,6 +51,7 @@ export async function POST(request: NextRequest) {
       typeof to !== "string" ||
       typeof mint !== "string" ||
       typeof amount !== "string" ||
+      (authToken !== undefined && typeof authToken !== "string") ||
       (gasless !== undefined && typeof gasless !== "boolean") ||
       (memo !== undefined && typeof memo !== "string") ||
       (exactOut !== undefined && typeof exactOut !== "boolean") ||
@@ -54,6 +61,12 @@ export async function POST(request: NextRequest) {
         (typeof maxDelayMs !== "string" || !/^\d+$/.test(maxDelayMs))) ||
       (split !== undefined &&
         (!Number.isInteger(split) || split < 1 || split > 10)) ||
+      (fromBalance !== undefined &&
+        fromBalance !== "base" &&
+        fromBalance !== "ephemeral") ||
+      (toBalance !== undefined &&
+        toBalance !== "base" &&
+        toBalance !== "ephemeral") ||
       (visibility !== "public" && visibility !== "private")
     ) {
       return NextResponse.json(
@@ -109,9 +122,33 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const resolvedFromBalance = fromBalance ?? "base";
+    const resolvedToBalance = toBalance ?? "base";
+
+    if (resolvedToBalance === "ephemeral" && visibility !== "private") {
+      return NextResponse.json(
+        { error: "Shielded balance delivery requires shielded routing" },
+        { status: 400 }
+      );
+    }
+
+    if (resolvedFromBalance === "ephemeral" && !authToken?.trim()) {
+      return NextResponse.json(
+        { error: "Shielded balance source requires authentication" },
+        { status: 400 }
+      );
+    }
+
+    const upstreamHeaders: HeadersInit = {
+      "Content-Type": "application/json",
+    };
+    if (resolvedFromBalance === "ephemeral") {
+      upstreamHeaders.Authorization = `Bearer ${authToken?.trim()}`;
+    }
+
     const upstreamRes = await fetch(getPaymentsApiUrl(PAYMENTS_ENDPOINTS.splTransfer), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: upstreamHeaders,
       body: JSON.stringify({
         from,
         to,
@@ -119,11 +156,11 @@ export async function POST(request: NextRequest) {
         mint,
         amount: Number(amountBigInt),
         visibility,
-        fromBalance: "base",
-        toBalance: "base",
+        fromBalance: resolvedFromBalance,
+        toBalance: resolvedToBalance,
         initIfMissing: true,
         initAtasIfMissing: true,
-        initVaultIfMissing: false,
+        initVaultIfMissing: resolvedToBalance === "ephemeral",
         ...(gasless === true ? { gasless: true } : {}),
         ...(memo ? { memo } : {}),
         ...(exactOut !== undefined ? { exactOut } : {}),

@@ -2,6 +2,7 @@ import { Header } from "@/components/one/header";
 import { TradeHub } from "@/components/one/trade-hub";
 // import { TokenPrices } from "@/components/one/token-prices";
 import { NetWorthPanel } from "@/components/one/net-worth-panel";
+import { PAYMENTS_CLUSTER } from "@/lib/payments";
 
 type HomeProps = {
   searchParams: Promise<{
@@ -56,19 +57,20 @@ export default async function Home({ searchParams }: HomeProps) {
       <Header />
 
       <main className="flex-1 relative z-10">
-        <NetWorthPanel />
-
         <div className="flex flex-col items-center px-4 pt-4 pb-10">
           {/* Subtitle */}
           <p className="text-sm text-muted-foreground mb-4">
             Onchain Payment Made Simple
           </p>
 
+          <NetWorthPanel />
+
           {/* Swap / Payment Section */}
           <TradeHub
             initialBuyMint={initialBuyMint}
             initialSellMint={initialSellMint}
             initialSwapAmount={initialSwapAmount}
+            isSwapDisabled={PAYMENTS_CLUSTER === "devnet"}
           />
 
           {/* Token Prices */}

@@ -1,0 +1,7 @@
+version: v1.25.0
+ignore:
+  SNYK-JS-BIGINTBUFFER-3364597:
+    - "*":
+        reason: No patched version is available for this transitive dependency pulled through @bonfida/spl-name-service.
+        expires: 2026-08-22T00:00:00.000Z
+patch: {}

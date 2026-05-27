@@ -28,12 +28,14 @@ import {
   Transaction,
   VersionedTransaction,
 } from "@solana/web3.js";
+import { getBase58Decoder } from "@solana/codecs-strings";
+import { createSolanaRpc } from "@solana/rpc";
+import { createSolanaRpcSubscriptions } from "@solana/rpc-subscriptions";
 import {
-  createSolanaRpc,
-  createSolanaRpcSubscriptions,
-  getBase58Decoder,
-} from "@solana/kit";
-import { PrivyProvider, usePrivy } from "@privy-io/react-auth";
+  PrivyProvider,
+  usePrivy,
+  type PrivyClientConfig,
+} from "@privy-io/react-auth";
 import { useWallets as usePrivyWallets } from "@privy-io/react-auth/solana";
 import { SOLANA_PUBLIC_RPC_ENDPOINT } from "@/lib/solana-rpc";
 import {
@@ -521,17 +523,18 @@ export function SolanaWalletProvider({ children }: { children: ReactNode }) {
     [endpoint],
   );
   const privySolanaConfig = useMemo(
-    () => ({
-      rpcs: {
-        [privySolanaChain]: {
-          rpc: createSolanaRpc(endpoint),
-          rpcSubscriptions: createSolanaRpcSubscriptions(
-            getSolanaWsEndpoint(endpoint),
-          ),
-          blockExplorerUrl: getSolanaExplorerUrl(privySolanaChain),
+    () =>
+      ({
+        rpcs: {
+          [privySolanaChain]: {
+            rpc: createSolanaRpc(endpoint),
+            rpcSubscriptions: createSolanaRpcSubscriptions(
+              getSolanaWsEndpoint(endpoint),
+            ),
+            blockExplorerUrl: getSolanaExplorerUrl(privySolanaChain),
+          },
         },
-      },
-    }),
+      }) as unknown as NonNullable<PrivyClientConfig["solana"]>,
     [endpoint, privySolanaChain],
   );
   const wallets = useMemo(

@@ -3,6 +3,9 @@ import { getPaymentsExplorerTransactionUrl } from "@/lib/payments";
 
 export async function GET(request: NextRequest) {
   const signature = request.nextUrl.searchParams.get("signature")?.trim();
+  const customRpcEndpoint = request.nextUrl.searchParams
+    .get("customUrl")
+    ?.trim();
 
   if (!signature) {
     return NextResponse.json(
@@ -11,5 +14,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  return NextResponse.redirect(getPaymentsExplorerTransactionUrl(signature));
+  return NextResponse.redirect(
+    getPaymentsExplorerTransactionUrl(signature, customRpcEndpoint)
+  );
 }

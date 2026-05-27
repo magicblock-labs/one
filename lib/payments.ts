@@ -1,6 +1,6 @@
 import { USDC_MINT } from "@/lib/tokens";
 
-const DEFAULT_PAYMENTS_API_BASE_URL = "https://payments.magicblock.app";
+const DEFAULT_PAYMENTS_API_BASE_URL = "https://api.magicblock.app";
 
 const configuredPaymentsApiBaseUrl =
   process.env.PAYMENTS_API_BASE_URL?.trim() ??
@@ -46,14 +46,19 @@ export const PAYMENTS_API_BASE_URL = (
   configuredPaymentsApiBaseUrl || DEFAULT_PAYMENTS_API_BASE_URL
 ).replace(/\/+$/, "");
 
-export const PAYMENTS_CLUSTER = normalizePaymentsCluster(configuredPaymentsCluster);
+export const PAYMENTS_CLUSTER = normalizePaymentsCluster(
+  configuredPaymentsCluster,
+);
 export const PAYMENTS_DEFAULT_USDC_MINT =
   configuredPaymentsTestUsdcMint || USDC_MINT;
 
 export const PAYMENTS_ENDPOINTS = {
+  deposit: "/v1/spl/deposit",
+  withdraw: "/v1/spl/withdraw",
   initializeMint: "/v1/spl/initialize-mint",
   isMintInitialized: "/v1/spl/is-mint-initialized",
   splTransfer: "/v1/spl/transfer",
+  transactionSend: "/v1/transaction/send",
   swapQuote: "/v1/swap/quote",
   swap: "/v1/swap/swap",
 } as const;
@@ -66,11 +71,27 @@ export function getPaymentsTimeoutSignal(timeoutMs = 15_000) {
   return AbortSignal.timeout(timeoutMs);
 }
 
-export function getPaymentsExplorerTransactionUrl(signature: string) {
+export function getPaymentsExplorerTransactionUrl(
+  signature: string,
+  customRpcEndpoint?: string | null
+) {
   const explorerUrl = new URL(
     `/tx/${encodeURIComponent(signature)}`,
-    "https://explorer.solana.com"
+    "https://explorer.solana.com",
   );
+
+  if (customRpcEndpoint) {
+    try {
+      const rpcUrl = new URL(customRpcEndpoint);
+      if (rpcUrl.protocol === "http:" || rpcUrl.protocol === "https:") {
+        explorerUrl.searchParams.set("cluster", "custom");
+        explorerUrl.searchParams.set("customUrl", rpcUrl.toString());
+        return explorerUrl.toString();
+      }
+    } catch {
+      // fall back to the configured cluster
+    }
+  }
 
   if (PAYMENTS_CLUSTER === "devnet" || PAYMENTS_CLUSTER === "testnet") {
     explorerUrl.searchParams.set("cluster", PAYMENTS_CLUSTER);

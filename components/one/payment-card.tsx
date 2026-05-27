@@ -1,5 +1,6 @@
 "use client";
 
+import bs58 from "bs58";
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   Loader2,
@@ -11,14 +12,13 @@ import {
   Shield,
   ShieldCheck,
   User,
-  Copy,
   AlertTriangle,
 } from "lucide-react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import type { ReadonlyURLSearchParams } from "next/navigation";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
-  type Connection,
+  Connection,
   PublicKey,
   Transaction,
   VersionedTransaction,
@@ -32,8 +32,21 @@ import {
 } from "@/lib/tokens";
 import { usePrices } from "@/hooks/use-sol-price";
 import { useAggregatorTokens } from "@/hooks/use-aggregator-tokens";
-import { dispatchPrivateBalanceRefresh } from "@/lib/private-balance-refresh";
+import {
+  PRIVATE_BALANCE_REFRESH_EVENT,
+  dispatchPrivateBalanceRefresh,
+} from "@/lib/private-balance-refresh";
 import { PAYMENTS_DEFAULT_USDC_MINT } from "@/lib/payments";
+import {
+  clearStoredPrivateAuthToken,
+  fetchPrivateBalance,
+  fetchSplChallenge,
+  formatBaseUnits,
+  getStoredPrivateAuthToken,
+  loginSplPrivate,
+  PRIVATE_AUTH_TOKEN_EVENT,
+  setStoredPrivateAuthToken,
+} from "@/lib/spl-private-balance";
 import {
   MAX_PRIVATE_DELAY_MS,
   clampPrivateSplit,
@@ -47,6 +60,11 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { TokenSelectModal } from "./token-select-modal";
 import { useUnifiedWallet } from "@/app/wallet/solana-wallet-provider";
 
@@ -57,6 +75,7 @@ type PaymentStatus =
   | "sending"
   | "confirmed"
   | "error";
+type BalanceLocation = "base" | "ephemeral";
 
 interface UnsignedPaymentTransaction {
   kind: string;
@@ -70,12 +89,21 @@ interface UnsignedPaymentTransaction {
   validator?: string;
 }
 
+interface SignedPaymentTransactionResponse {
+  confirmationRequiresAuthToken?: boolean;
+  confirmationRpcEndpoint?: string;
+  error?: string;
+  signature?: string;
+}
+
 interface MintInitializationResponse {
   initialized: boolean;
 }
 
 const SWAP_QUERY_PARAMS = ["buy", "sell", "amt"] as const;
 const REQUEST_QUERY_PARAMS = ["prd", "ramt", "rmint"] as const;
+const SPL_TOKEN_ACCOUNT_AMOUNT_OFFSET = 64;
+const SPL_TOKEN_ACCOUNT_AMOUNT_LENGTH = 8;
 
 function base64ToUint8Array(base64: string) {
   const binary = globalThis.atob(base64);
@@ -86,6 +114,16 @@ function base64ToUint8Array(base64: string) {
   }
 
   return bytes;
+}
+
+function uint8ArrayToBase64(bytes: Uint8Array) {
+  let binary = "";
+
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+
+  return globalThis.btoa(binary);
 }
 
 function deserializeUnsignedPaymentTransaction(
@@ -123,6 +161,18 @@ function deserializeUnsignedPaymentTransaction(
   );
 }
 
+function preparePaymentTransactionForSigning(
+  transaction: Transaction | VersionedTransaction,
+  recentBlockhash: string
+) {
+  if (transaction instanceof VersionedTransaction) {
+    transaction.message.recentBlockhash = recentBlockhash;
+    return;
+  }
+
+  transaction.recentBlockhash = recentBlockhash;
+}
+
 function decimalAmountToBaseUnits(value: string, decimals: number) {
   if (!value.trim() || !/^\d*\.?\d*$/.test(value)) return null;
 
@@ -142,6 +192,18 @@ function decimalAmountToBaseUnits(value: string, decimals: number) {
 function getInitialPaymentMint(searchParams: ReadonlyURLSearchParams) {
   const mint = searchParams.get("mint")?.trim();
   return mint && findTokenByMint(mint) ? mint : PAYMENTS_DEFAULT_USDC_MINT;
+}
+
+function getInitialRecipientBalance(searchParams: ReadonlyURLSearchParams) {
+  return searchParams.get("toBalance") === "ephemeral"
+    ? "ephemeral"
+    : "base";
+}
+
+function getInitialSourceBalance(searchParams: ReadonlyURLSearchParams) {
+  return searchParams.get("fromBalance") === "ephemeral"
+    ? "ephemeral"
+    : "base";
 }
 
 function parseIntegerParam(
@@ -180,12 +242,77 @@ function shortenAddress(value: string) {
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
+function getErrorTransactionSignature(message: string | null) {
+  if (!message) return null;
+
+  const failedMatch = message.match(
+    /^Transaction failed on-chain:\s*([1-9A-HJ-NP-Za-km-z]{64,})/
+  );
+  if (failedMatch) return failedMatch[1];
+
+  const expiredMatch = message.match(
+    /^Signature\s+([1-9A-HJ-NP-Za-km-z]{64,})\s+has expired:/
+  );
+  if (expiredMatch) return expiredMatch[1];
+
+  return null;
+}
+
+function getErrorTransactionLabel(message: string | null) {
+  const expiredMatch = message?.match(
+    /^Signature\s+[1-9A-HJ-NP-Za-km-z]{64,}\s+has expired:\s*(.+)$/
+  );
+  if (expiredMatch) {
+    return `Signature expired: ${expiredMatch[1]}`;
+  }
+
+  return "Transaction failed on-chain";
+}
+
+function getExplorerTransactionHref(
+  signature: string,
+  customRpcEndpoint?: string | null
+) {
+  const params = new URLSearchParams({ signature });
+
+  if (customRpcEndpoint) {
+    params.set("customUrl", customRpcEndpoint);
+  }
+
+  return `/api/explorer/tx?${params.toString()}`;
+}
+
 function formatTokenBalance(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "0";
 
   return value.toLocaleString(undefined, {
     maximumFractionDigits: value >= 1_000 ? 2 : value >= 1 ? 4 : 6,
   });
+}
+
+function readTokenAccountAmount(data: Uint8Array) {
+  if (
+    data.byteLength <
+    SPL_TOKEN_ACCOUNT_AMOUNT_OFFSET + SPL_TOKEN_ACCOUNT_AMOUNT_LENGTH
+  ) {
+    return BigInt(0);
+  }
+
+  return new DataView(
+    data.buffer,
+    data.byteOffset + SPL_TOKEN_ACCOUNT_AMOUNT_OFFSET,
+    SPL_TOKEN_ACCOUNT_AMOUNT_LENGTH
+  ).getBigUint64(0, true);
+}
+
+function hasPositiveBaseUnits(raw: string | null) {
+  if (!raw) return false;
+
+  try {
+    return BigInt(raw) > BigInt(0);
+  } catch {
+    return false;
+  }
 }
 
 async function fetchFormattedTokenBalance(
@@ -199,16 +326,17 @@ async function fetchFormattedTokenBalance(
     return formatTokenBalance(lamports / Math.pow(10, decimals));
   }
 
-  const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+  const tokenAccounts = await connection.getTokenAccountsByOwner(
     owner,
     { mint: new PublicKey(tokenMint) },
     "confirmed"
   );
 
-  const uiAmount = tokenAccounts.value.reduce((total, account) => {
-    const tokenAmount = account.account.data.parsed.info.tokenAmount;
-    return total + Number(tokenAmount.uiAmountString ?? tokenAmount.uiAmount ?? 0);
-  }, 0);
+  const rawAmount = tokenAccounts.value.reduce(
+    (total, account) => total + readTokenAccountAmount(account.account.data),
+    BigInt(0)
+  );
+  const uiAmount = Number(rawAmount) / Math.pow(10, decimals);
 
   return formatTokenBalance(uiAmount);
 }
@@ -217,20 +345,27 @@ const TOKEN_PROGRAM_IDS = [
   new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
   new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
 ];
+const DEFAULT_MIN_DELAY_MS = 3_000;
+const DEFAULT_MAX_DELAY_MS = 30_000;
 
 export function PaymentCard() {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const isInitiallyPrivate = !searchParams.has("public");
+  const initialRecipientBalance = getInitialRecipientBalance(searchParams);
+  const initialSourceBalance = getInitialSourceBalance(searchParams);
+  const isInitiallyPrivate =
+    initialSourceBalance === "ephemeral" ||
+    initialRecipientBalance === "ephemeral" ||
+    !searchParams.has("public");
   const searchMint = searchParams.get("mint")?.trim() ?? "";
   const initialMinDelayMs = isInitiallyPrivate
-    ? parseIntegerParam(searchParams.get("min"), 0, 0, MAX_PRIVATE_DELAY_MS)
+    ? parseIntegerParam(searchParams.get("min"), DEFAULT_MIN_DELAY_MS, 0, MAX_PRIVATE_DELAY_MS)
     : 0;
   const initialMaxDelayMs = isInitiallyPrivate
     ? Math.max(
       initialMinDelayMs,
-      parseIntegerParam(searchParams.get("max"), 0, 0, MAX_PRIVATE_DELAY_MS)
+      parseIntegerParam(searchParams.get("max"), DEFAULT_MAX_DELAY_MS, 0, MAX_PRIVATE_DELAY_MS)
     )
     : 0;
   const initialSplit = isInitiallyPrivate
@@ -238,8 +373,9 @@ export function PaymentCard() {
     : 1;
   const initialGasless = searchParams.get("gasless") === "1";
   const { connection } = useConnection();
-  const { connected, openConnectModal, publicKey, signTransaction } =
+  const { connected, openConnectModal, publicKey, signMessage, signTransaction } =
     useUnifiedWallet();
+  const owner = publicKey?.toBase58() ?? null;
 
   const [tokenMint, setTokenMint] = useState(() =>
     getInitialPaymentMint(searchParams)
@@ -247,19 +383,32 @@ export function PaymentCard() {
   const [amount, setAmount] = useState("");
   const [receiver, setReceiver] = useState(() => searchParams.get("rcv") ?? "");
   const [memo, setMemo] = useState(() => searchParams.get("memo") ?? "");
+  const [sourceBalance, setSourceBalance] =
+    useState<BalanceLocation>(() => initialSourceBalance);
+  const [recipientBalance, setRecipientBalance] =
+    useState<BalanceLocation>(() => initialRecipientBalance);
   const [isPrivate, setIsPrivate] = useState(() => isInitiallyPrivate);
   const [isGasless, setIsGasless] = useState(() => initialGasless);
   const [minDelayMs, setMinDelayMs] = useState(() => initialMinDelayMs);
   const [maxDelayMs, setMaxDelayMs] = useState(() => initialMaxDelayMs);
   const [split, setSplit] = useState(() => initialSplit);
   const [exactOut, setExactOut] = useState(true);
-  const [advancedOpen, setAdvancedOpen] = useState(() => initialGasless);
+  const [advancedOpen, setAdvancedOpen] = useState(
+    () => initialGasless || Boolean(searchParams.get("memo"))
+  );
   const [modalOpen, setModalOpen] = useState(false);
   const [resolvedDomainAddress, setResolvedDomainAddress] = useState<string | null>(null);
   const [recipientPrimaryDomain, setRecipientPrimaryDomain] = useState<string | null>(null);
   const [isResolvingRecipient, setIsResolvingRecipient] = useState(false);
   const [walletTokenBalance, setWalletTokenBalance] = useState<string | null>(null);
   const [isWalletTokenBalanceLoading, setIsWalletTokenBalanceLoading] = useState(false);
+  const [privateAuthToken, setPrivateAuthToken] = useState<string | null>(null);
+  const [privateBalanceRaw, setPrivateBalanceRaw] = useState<string | null>(null);
+  const [isPrivateBalanceLoading, setIsPrivateBalanceLoading] = useState(false);
+  const [privateBalanceError, setPrivateBalanceError] = useState<string | null>(null);
+  const [privateAuthBusy, setPrivateAuthBusy] = useState(false);
+  const [privateAuthChecked, setPrivateAuthChecked] = useState(false);
+  const [privateAuthError, setPrivateAuthError] = useState<string | null>(null);
   const [walletSolLamports, setWalletSolLamports] = useState<number | null>(null);
   const [recipientTokenBalance, setRecipientTokenBalance] = useState<string | null>(null);
   const [isRecipientTokenBalanceLoading, setIsRecipientTokenBalanceLoading] = useState(false);
@@ -270,8 +419,10 @@ export function PaymentCard() {
 
   const [status, setStatus] = useState<PaymentStatus>("idle");
   const [txSignature, setTxSignature] = useState<string | null>(null);
+  const [txExplorerRpcEndpoint, setTxExplorerRpcEndpoint] = useState<
+    string | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const gaslessAutoOptOutRef = useRef(false);
 
   const { tokens } = useAggregatorTokens();
@@ -328,6 +479,7 @@ export function PaymentCard() {
     });
     setError(null);
     setTxSignature(null);
+    setTxExplorerRpcEndpoint(null);
   }, []);
 
   useEffect(() => {
@@ -496,6 +648,83 @@ export function PaymentCard() {
     };
   }, [connection, connected, publicKey, tokenMint, selectedToken.decimals, status]);
 
+  const loadPrivateBalance = useCallback(
+    async (token: string) => {
+      if (!owner) {
+        setPrivateBalanceRaw(null);
+        setPrivateBalanceError(null);
+        setIsPrivateBalanceLoading(false);
+        return;
+      }
+
+      setIsPrivateBalanceLoading(true);
+      setPrivateBalanceError(null);
+      try {
+        const row = await fetchPrivateBalance(owner, tokenMint, token);
+        setPrivateBalanceRaw(row.balance);
+      } catch (error) {
+        setPrivateBalanceRaw(null);
+        setPrivateBalanceError(
+          error instanceof Error ? error.message : "Failed to load shielded balance"
+        );
+        clearStoredPrivateAuthToken(owner);
+        setPrivateAuthToken(null);
+        setSourceBalance("base");
+      } finally {
+        setIsPrivateBalanceLoading(false);
+      }
+    },
+    [owner, tokenMint]
+  );
+
+  useEffect(() => {
+    if (!owner) {
+      setPrivateAuthChecked(false);
+      setPrivateAuthToken(null);
+      setPrivateBalanceRaw(null);
+      setPrivateBalanceError(null);
+      return;
+    }
+
+    const syncAuthToken = () => {
+      setPrivateAuthToken(getStoredPrivateAuthToken(owner));
+      setPrivateAuthChecked(true);
+    };
+
+    setPrivateAuthChecked(false);
+    syncAuthToken();
+    window.addEventListener(PRIVATE_AUTH_TOKEN_EVENT, syncAuthToken);
+    window.addEventListener("storage", syncAuthToken);
+
+    return () => {
+      window.removeEventListener(PRIVATE_AUTH_TOKEN_EVENT, syncAuthToken);
+      window.removeEventListener("storage", syncAuthToken);
+    };
+  }, [owner]);
+
+  useEffect(() => {
+    if (!owner || !privateAuthToken) {
+      setPrivateBalanceRaw(null);
+      setPrivateBalanceError(null);
+      setIsPrivateBalanceLoading(false);
+      return;
+    }
+
+    void loadPrivateBalance(privateAuthToken);
+  }, [owner, privateAuthToken, loadPrivateBalance, status]);
+
+  useEffect(() => {
+    if (!privateAuthToken) return;
+
+    const onRefresh = () => {
+      void loadPrivateBalance(privateAuthToken);
+    };
+
+    window.addEventListener(PRIVATE_BALANCE_REFRESH_EVENT, onRefresh);
+    return () =>
+      window.removeEventListener(PRIVATE_BALANCE_REFRESH_EVENT, onRefresh);
+  }, [privateAuthToken, loadPrivateBalance]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -618,6 +847,8 @@ export function PaymentCard() {
     const currentReceiver = params.get("rcv") ?? "";
     const currentMint = params.get("mint") ?? "";
     const currentMemo = params.get("memo") ?? "";
+    const currentFromBalance = params.get("fromBalance") ?? "";
+    const currentToBalance = params.get("toBalance") ?? "";
     const currentPublic = params.has("public");
     const currentMinDelayMs = params.get("min") ?? "";
     const currentMaxDelayMs = params.get("max") ?? "";
@@ -628,6 +859,10 @@ export function PaymentCard() {
     const nextMaxDelayMs = shouldPersistRoutingParams ? String(maxDelayMs) : "";
     const nextSplit = shouldPersistRoutingParams ? String(split) : "";
     const nextGasless = isGasless ? "1" : "";
+    const nextFromBalance =
+      sourceBalance === "ephemeral" ? "ephemeral" : "";
+    const nextToBalance =
+      recipientBalance === "ephemeral" ? "ephemeral" : "";
     const hasForeignParams =
       SWAP_QUERY_PARAMS.some((key) => params.has(key)) ||
       REQUEST_QUERY_PARAMS.some((key) => params.has(key));
@@ -636,6 +871,8 @@ export function PaymentCard() {
       currentReceiver === receiver &&
       currentMint === nextMint &&
       currentMemo === memo &&
+      currentFromBalance === nextFromBalance &&
+      currentToBalance === nextToBalance &&
       currentPublic === !isPrivate &&
       currentMinDelayMs === nextMinDelayMs &&
       currentMaxDelayMs === nextMaxDelayMs &&
@@ -669,6 +906,18 @@ export function PaymentCard() {
       params.delete("memo");
     }
 
+    if (nextToBalance) {
+      params.set("toBalance", nextToBalance);
+    } else {
+      params.delete("toBalance");
+    }
+
+    if (nextFromBalance) {
+      params.set("fromBalance", nextFromBalance);
+    } else {
+      params.delete("fromBalance");
+    }
+
     if (!isPrivate) {
       params.set("public", "true");
     } else {
@@ -699,6 +948,8 @@ export function PaymentCard() {
     receiver,
     tokenMint,
     memo,
+    sourceBalance,
+    recipientBalance,
     isPrivate,
     isGasless,
     minDelayMs,
@@ -716,14 +967,6 @@ export function PaymentCard() {
     },
     [resetResultState]
   );
-
-  const handleCopyAddress = useCallback(() => {
-    if (publicKey) {
-      navigator.clipboard.writeText(publicKey.toBase58());
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  }, [publicKey]);
 
   const handleDelayRangeChange = useCallback(
     (values: number[]) => {
@@ -752,10 +995,81 @@ export function PaymentCard() {
     [resetResultState, walletSolLamports]
   );
 
+  const ensurePrivateRoutingDefaults = useCallback(() => {
+    if (minDelayMs === 0 && maxDelayMs === 0) {
+      setMinDelayMs(DEFAULT_MIN_DELAY_MS);
+      setMaxDelayMs(DEFAULT_MAX_DELAY_MS);
+    }
+  }, [maxDelayMs, minDelayMs]);
+
+  const handlePrivateRoutingChange = useCallback(
+    (enabled: boolean) => {
+      resetResultState();
+      if (!enabled && recipientBalance === "ephemeral") {
+        setRecipientBalance("base");
+      }
+      if (!enabled && sourceBalance === "ephemeral") {
+        setSourceBalance("base");
+      }
+      if (enabled) {
+        ensurePrivateRoutingDefaults();
+      }
+      setIsPrivate(enabled);
+    },
+    [ensurePrivateRoutingDefaults, recipientBalance, resetResultState, sourceBalance]
+  );
+
+  const handleSourceBalanceChange = useCallback((nextBalance: BalanceLocation) => {
+    resetResultState();
+    setSourceBalance(nextBalance);
+    if (nextBalance === "ephemeral") {
+      setIsPrivate(true);
+    }
+  }, [resetResultState]);
+
+  const handleRecipientBalanceChange = useCallback(
+    (nextBalance: BalanceLocation) => {
+      resetResultState();
+      setRecipientBalance(nextBalance);
+      if (nextBalance === "ephemeral") {
+        ensurePrivateRoutingDefaults();
+        setIsPrivate(true);
+      }
+    },
+    [ensurePrivateRoutingDefaults, resetResultState]
+  );
+
+  const handlePrivateBalanceAuthenticate = useCallback(async () => {
+    if (!owner || !signMessage) return;
+
+    setPrivateAuthBusy(true);
+    setPrivateAuthError(null);
+    try {
+      const challenge = await fetchSplChallenge(owner);
+      const message = new TextEncoder().encode(challenge);
+      const sigBytes = await signMessage(message);
+      const token = await loginSplPrivate({
+        pubkey: owner,
+        challenge,
+        signature: bs58.encode(sigBytes),
+      });
+      setStoredPrivateAuthToken(owner, token);
+      setPrivateAuthToken(token);
+      await loadPrivateBalance(token);
+    } catch (error) {
+      setPrivateAuthError(
+        error instanceof Error ? error.message : "Authentication failed"
+      );
+    } finally {
+      setPrivateAuthBusy(false);
+    }
+  }, [loadPrivateBalance, owner, signMessage]);
+
   const signAndSendUnsignedTransaction = useCallback(
     async (
       unsignedTransaction: UnsignedPaymentTransaction,
-      onBeforeSend?: () => void
+      onBeforeSend?: () => void,
+      options?: { authToken?: string | null; submitViaPaymentsApi?: boolean }
     ) => {
       if (!publicKey || !signTransaction || !connected) {
         throw new Error("Wallet not connected");
@@ -765,10 +1079,83 @@ export function PaymentCard() {
         throw new Error("Wallet is not listed as a required signer");
       }
 
+      const shouldSubmitViaPaymentsApi =
+        options?.submitViaPaymentsApi ||
+        unsignedTransaction.sendTo === "ephemeral";
       const transaction = deserializeUnsignedPaymentTransaction(unsignedTransaction);
+      if (shouldSubmitViaPaymentsApi) {
+        preparePaymentTransactionForSigning(
+          transaction,
+          unsignedTransaction.recentBlockhash
+        );
+      }
       const signedTransaction = await signTransaction(transaction);
 
       onBeforeSend?.();
+
+      if (shouldSubmitViaPaymentsApi) {
+        const signedTransactionBase64 = uint8ArrayToBase64(
+          signedTransaction.serialize()
+        );
+        const sendRes = await fetch("/api/payments/transaction/send", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(options?.authToken
+              ? { Authorization: `Bearer ${options.authToken}` }
+              : {}),
+          },
+          body: JSON.stringify({
+            transactionBase64: signedTransactionBase64,
+            sendTo: unsignedTransaction.sendTo,
+          }),
+        });
+
+        const sendJson = (await sendRes.json().catch(
+          () => ({})
+        )) as SignedPaymentTransactionResponse;
+        if (!sendRes.ok) {
+          throw new Error(
+            sendJson.error ? sendJson.error : `Send failed: ${sendRes.status}`
+          );
+        }
+        if (!sendJson.signature) {
+          throw new Error("Send response did not include a signature");
+        }
+        if (!sendJson.confirmationRpcEndpoint) {
+          throw new Error("Send response did not include a confirmation RPC endpoint");
+        }
+
+        setTxSignature(sendJson.signature);
+        setTxExplorerRpcEndpoint(sendJson.confirmationRpcEndpoint);
+        const confirmationConnection = new Connection(
+          sendJson.confirmationRpcEndpoint,
+          {
+            commitment: "confirmed",
+            ...(sendJson.confirmationRequiresAuthToken && options?.authToken
+              ? {
+                  httpHeaders: {
+                    Authorization: `Bearer ${options.authToken}`,
+                  },
+                }
+              : {}),
+          }
+        );
+        const confirmation = await confirmationConnection.confirmTransaction(
+          {
+            signature: sendJson.signature,
+            blockhash: unsignedTransaction.recentBlockhash,
+            lastValidBlockHeight: unsignedTransaction.lastValidBlockHeight,
+          },
+          "confirmed"
+        );
+
+        if (confirmation.value.err) {
+          throw new Error(`Transaction failed on-chain: ${sendJson.signature}`);
+        }
+
+        return sendJson.signature;
+      }
 
       const signature = await connection.sendRawTransaction(
         signedTransaction.serialize(),
@@ -777,6 +1164,8 @@ export function PaymentCard() {
           maxRetries: 10,
         }
       );
+      setTxSignature(signature);
+      setTxExplorerRpcEndpoint(null);
 
       const confirmation = await connection.confirmTransaction(
         {
@@ -848,6 +1237,7 @@ export function PaymentCard() {
     setStatus("building");
     setError(null);
     setTxSignature(null);
+    setTxExplorerRpcEndpoint(null);
 
     try {
       const buildRes = await fetch("/api/payments/transfer", {
@@ -858,7 +1248,17 @@ export function PaymentCard() {
           to: resolvedReceiver,
           mint: tokenMint,
           amount: rawAmount,
-          visibility: isPrivate ? "private" : "public",
+          visibility:
+            isPrivate ||
+            sourceBalance === "ephemeral" ||
+            recipientBalance === "ephemeral"
+              ? "private"
+              : "public",
+          fromBalance: sourceBalance,
+          toBalance: recipientBalance,
+          ...(sourceBalance === "ephemeral" && privateAuthToken
+            ? { authToken: privateAuthToken }
+            : {}),
           ...(isGasless ? { gasless: true } : {}),
           ...(memo ? { memo } : {}),
           exactOut,
@@ -886,7 +1286,11 @@ export function PaymentCard() {
       setStatus("signing");
       const signature = await signAndSendUnsignedTransaction(
         unsignedTransaction,
-        () => setStatus("sending")
+        () => setStatus("sending"),
+        {
+          authToken: privateAuthToken,
+          submitViaPaymentsApi: sourceBalance === "ephemeral",
+        }
       );
       setTxSignature(signature);
       setStatus("confirmed");
@@ -909,6 +1313,9 @@ export function PaymentCard() {
     resolvedReceiver,
     tokenMint,
     isPrivate,
+    sourceBalance,
+    privateAuthToken,
+    recipientBalance,
     isGasless,
     memo,
     exactOut,
@@ -923,10 +1330,57 @@ export function PaymentCard() {
   const handleReset = useCallback(() => {
     setStatus("idle");
     setTxSignature(null);
+    setTxExplorerRpcEndpoint(null);
     setError(null);
     setAmount("");
     setMemo("");
   }, []);
+
+  const privateBalanceLabel = isPrivateBalanceLoading
+    ? "..."
+    : formatBaseUnits(privateBalanceRaw ?? "0", selectedToken.decimals);
+  const publicBalanceLabel = isWalletTokenBalanceLoading
+    ? "..."
+    : walletTokenBalance ?? "0";
+  const shouldShowPrivateBalance =
+    Boolean(privateAuthToken) &&
+    (isPrivateBalanceLoading ||
+      Boolean(privateAuthError || privateBalanceError) ||
+      hasPositiveBaseUnits(privateBalanceRaw));
+  const canSendFromPrivateBalance =
+    Boolean(privateAuthToken) && hasPositiveBaseUnits(privateBalanceRaw);
+  const errorTransactionSignature = getErrorTransactionSignature(error);
+  const errorTxSignature = txSignature ?? errorTransactionSignature;
+
+  useEffect(() => {
+    const hasLoadedPrivateBalance =
+      privateBalanceRaw !== null || Boolean(privateBalanceError);
+    if (
+      sourceBalance === "ephemeral" &&
+      privateAuthChecked &&
+      !privateAuthToken
+    ) {
+      setSourceBalance("base");
+      return;
+    }
+    if (
+      sourceBalance === "ephemeral" &&
+      privateAuthToken &&
+      !isPrivateBalanceLoading &&
+      hasLoadedPrivateBalance &&
+      !canSendFromPrivateBalance
+    ) {
+      setSourceBalance("base");
+    }
+  }, [
+    canSendFromPrivateBalance,
+    isPrivateBalanceLoading,
+    privateAuthChecked,
+    privateAuthToken,
+    privateBalanceError,
+    privateBalanceRaw,
+    sourceBalance,
+  ]);
 
   return (
     <>
@@ -935,13 +1389,54 @@ export function PaymentCard() {
           {/* Send Section */}
           <div className="mx-3 mt-3 mb-1">
             <div className="rounded-xl bg-[var(--surface-inner)] border border-border/50 p-4">
-              <div className="text-xs text-muted-foreground mb-3">You send</div>
+              <div className="relative mb-3 h-4">
+                <div className="text-xs leading-4 text-muted-foreground">You send</div>
+                {canSendFromPrivateBalance && (
+                  <fieldset className="absolute right-0 top-1/2 grid -translate-y-1/2 grid-cols-2 gap-0.5 rounded-md bg-secondary/60 p-px">
+                    <legend className="sr-only">Payment source balance</legend>
+                    <button
+                      type="button"
+                      onClick={() => handleSourceBalanceChange("base")}
+                      aria-pressed={sourceBalance === "base"}
+                      className={`h-5 rounded px-1.5 text-[10px] font-medium leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                        sourceBalance === "base"
+                          ? "bg-primary text-primary-foreground"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      Wallet
+                    </button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleSourceBalanceChange("ephemeral")
+                          }
+                          aria-pressed={sourceBalance === "ephemeral"}
+                          className={`h-5 rounded px-1.5 text-[10px] font-medium leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                            sourceBalance === "ephemeral"
+                              ? "bg-primary text-primary-foreground"
+                              : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          Shielded
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" className="max-w-[220px]">
+                        Send instantly from your shielded balance with no gas and zero fees.
+                      </TooltipContent>
+                    </Tooltip>
+                  </fieldset>
+                )}
+              </div>
               <div className="flex items-center justify-between">
                 <div>
                   {/* Temporary: restore onClick, hover styles, and ChevronDown below to re-enable token selection. */}
                   <button
                     disabled
-                    className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-accent/60 transition-colors cursor-default"
+                    className="flex items-center gap-2.5 px-3
+                     py-2 rounded-xl bg-accent/60 transition-colors cursor-default"
                   >
                     {selectedToken.logoURI ? (
                       <img
@@ -962,10 +1457,42 @@ export function PaymentCard() {
                   </button>
                   {connected && publicKey && (
                     <div className="mt-1 px-1 text-xs text-muted-foreground">
-                      Balance:{" "}
-                      {isWalletTokenBalanceLoading
-                        ? "..."
-                        : `${walletTokenBalance ?? "0"} ${selectedToken.symbol}`}
+                      <span
+                        className={
+                          canSendFromPrivateBalance && sourceBalance === "base"
+                            ? "font-medium text-foreground"
+                            : undefined
+                        }
+                      >
+                        {canSendFromPrivateBalance && sourceBalance === "base"
+                          ? "From public"
+                          : "Public"}
+                        : {publicBalanceLabel}
+                      </span>
+                      {shouldShowPrivateBalance && (
+                        <>
+                          <span className="px-1.5 text-muted-foreground/60">
+                            |
+                          </span>
+                          <span
+                            className={
+                              sourceBalance === "ephemeral"
+                                ? "font-medium text-foreground"
+                                : undefined
+                            }
+                          >
+                            {sourceBalance === "ephemeral"
+                              ? "From shielded"
+                              : "Shielded"}
+                            : {privateBalanceLabel}
+                          </span>
+                        </>
+                      )}
+                      {(privateAuthError || privateBalanceError) && (
+                        <div className="text-destructive">
+                          {privateAuthError || privateBalanceError}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1032,10 +1559,12 @@ export function PaymentCard() {
               )}
               {receiver && !isResolvingRecipient && isValidReceiver && (
                 <div className="mt-2 text-xs text-muted-foreground">
-                  Balance:{" "}
+                  Public:{" "}
                   {isRecipientTokenBalanceLoading
                     ? "..."
                     : `${recipientTokenBalance ?? "0"} ${selectedToken.symbol}`}
+                  <span className="px-1.5 text-muted-foreground/60">|</span>
+                  Shielded: ***
                 </div>
               )}
               {receiver && !isResolvingRecipient && !isValidReceiver && !isDomainReceiver && (
@@ -1044,23 +1573,49 @@ export function PaymentCard() {
                   Invalid Solana address
                 </div>
               )}
-            </div>
-          </div>
+              <fieldset className="mt-3">
+                <legend className="mb-2 text-xs text-muted-foreground">
+                  Send to:
+                </legend>
+                <div className="grid grid-cols-2 gap-1 rounded-lg bg-secondary/60 p-1">
+                  {([
+                    [
+                      "base",
+                      "Wallet",
+                      "Destination receives tokens in the main wallet after anonymization.",
+                    ],
+                    [
+                      "ephemeral",
+                      "Shielded balance",
+                      "Destination receives tokens in their shielded balance, claimable later.",
+                    ],
+                  ] as const).map(([value, label, hint]) => {
+                    const isSelected = recipientBalance === value;
 
-          {/* Memo (optional) */}
-          <div className="mx-3 mt-2">
-            <div className="rounded-xl bg-[var(--surface-inner)] border border-border/30 px-4 py-3">
-              <input
-                type="text"
-                value={memo}
-                onChange={(e) => {
-                  setMemo(e.target.value);
-                  resetResultState();
-                }}
-                placeholder="Add a memo (optional)"
-                maxLength={140}
-                className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground/40 outline-none"
-              />
+                    return (
+                      <Tooltip key={value}>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={() => handleRecipientBalanceChange(value)}
+                            className={`inline-flex min-h-9 items-center justify-center gap-1.5 rounded-md px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                              isSelected
+                                ? "bg-primary text-primary-foreground"
+                                : "text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            <span>{label}</span>
+                            <CircleHelp className="h-3 w-3 opacity-80" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" className="max-w-[220px]">
+                          {hint}
+                        </TooltipContent>
+                      </Tooltip>
+                    );
+                  })}
+                </div>
+              </fieldset>
             </div>
           </div>
 
@@ -1068,19 +1623,21 @@ export function PaymentCard() {
           <div className="mx-3 mt-2">
             <PrivateRoutingControls
               id="private-transfer-toggle"
-              label="Private transfer"
+              label="Shielded transfer"
               enabled={isPrivate}
-              onEnabledChange={(enabled) => {
-                setIsPrivate(enabled);
-                resetResultState();
-              }}
-              summary={routingSummary}
-              disabledDescription="Enable MagicBlock private transactions"
+              onEnabledChange={handlePrivateRoutingChange}
+              summary={
+                recipientBalance === "ephemeral"
+                  ? "Shielded balance delivery"
+                  : routingSummary
+              }
+              disabledDescription="Enable MagicBlock shielded transactions"
               minDelayMs={minDelayMs}
               maxDelayMs={maxDelayMs}
               onDelayRangeChange={handleDelayRangeChange}
               split={split}
               onSplitChange={handleSplitChange}
+              showRoutingControls={recipientBalance !== "ephemeral"}
             />
           </div >
 
@@ -1107,6 +1664,29 @@ export function PaymentCard() {
                   id="advanced-settings-panel"
                   className="border-t border-border/40 px-4 py-3 space-y-4"
                 >
+                  {/* Memo (optional) */}
+                  <div className="space-y-2">
+                    <label
+                      htmlFor="payment-memo"
+                      className="text-xs font-medium text-foreground"
+                    >
+                      Memo
+                    </label>
+                    <input
+                      id="payment-memo"
+                      type="text"
+                      value={memo}
+                      onChange={(e) => {
+                        setMemo(e.target.value);
+                        resetResultState();
+                      }}
+                      placeholder="Add a memo (optional)"
+                      maxLength={140}
+                      autoComplete="off"
+                      className="min-h-10 w-full rounded-lg border border-border/30 bg-[var(--surface-inner)] px-3 text-sm text-foreground placeholder:text-muted-foreground/40 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                  </div>
+
                   {/* Exact Out */}
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
@@ -1182,38 +1762,35 @@ export function PaymentCard() {
             </div>
           </div>
 
-          {/* Your address */}
-          {
-            connected && publicKey && (
-              <div className="mx-3 mt-2 flex items-center justify-between px-4 py-2.5 rounded-xl bg-secondary/30">
-                <div className="text-xs text-muted-foreground">
-                  Sending from{" "}
-                  <span className="font-mono text-foreground/70">
-                    {publicKey.toBase58().slice(0, 4)}...{publicKey.toBase58().slice(-4)}
-                  </span>
-                </div>
-                <button
-                  onClick={handleCopyAddress}
-                  className="p-1 rounded-md hover:bg-accent transition-colors cursor-pointer"
-                >
-                  {copied ? (
-                    <Check className="w-3 h-3 text-success" />
-                  ) : (
-                    <Copy className="w-3 h-3 text-muted-foreground" />
-                  )}
-                </button>
-              </div>
-            )
-          }
-
           {/* Error */}
           {
             error && status === "error" && (
               <div className="mx-3 mt-2 flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/20">
-                <span className="text-xs text-destructive">{error}</span>
-                {txSignature && (
+                {errorTransactionSignature ? (
                   <a
-                    href={`/api/explorer/tx?signature=${encodeURIComponent(txSignature)}`}
+                    href={getExplorerTransactionHref(
+                      errorTransactionSignature,
+                      txExplorerRpcEndpoint
+                    )}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="min-w-0 inline-flex items-center gap-1 text-xs text-destructive hover:underline"
+                  >
+                    <span>{getErrorTransactionLabel(error)}:</span>
+                    <span className="font-mono">
+                      {shortenAddress(errorTransactionSignature)}
+                    </span>
+                    <ExternalLink className="h-3 w-3 shrink-0" />
+                  </a>
+                ) : (
+                  <span className="text-xs text-destructive">{error}</span>
+                )}
+                {errorTxSignature && !errorTransactionSignature && (
+                  <a
+                    href={getExplorerTransactionHref(
+                      errorTxSignature,
+                      txExplorerRpcEndpoint
+                    )}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="shrink-0 flex items-center gap-1 text-xs text-destructive hover:underline"
@@ -1234,7 +1811,7 @@ export function PaymentCard() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="text-sm font-medium text-foreground">
-                          Private payments are not enabled for this mint yet.
+                          Shielded payments are not enabled for this mint yet.
                         </div>
                         <p className="mt-1 text-xs leading-5 text-muted-foreground">
                           Pay the fees (~0.2 SOL) and set it up permissionlessly.
@@ -1270,7 +1847,10 @@ export function PaymentCard() {
                   <span className="text-xs text-success">Payment sent!</span>
                 </div>
                 <a
-                  href={`/api/explorer/tx?signature=${encodeURIComponent(txSignature)}`}
+                  href={getExplorerTransactionHref(
+                    txSignature,
+                    txExplorerRpcEndpoint
+                  )}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-1 text-xs text-success hover:underline"

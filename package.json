@@ -43,7 +43,10 @@
     "@solana-program/memo": "^0.11.0",
     "@solana-program/system": "^0.12.0",
     "@solana-program/token": "^0.12.0",
+    "@solana/codecs-strings": "6.9.0",
     "@solana/kit": "^6.5.0",
+    "@solana/rpc": "6.9.0",
+    "@solana/rpc-subscriptions": "6.9.0",
     "@solana/wallet-adapter-base": "^0.9.23",
     "@solana/wallet-adapter-react": "^0.15.35",
     "@solana/wallet-adapter-react-ui": "^0.9.35",
@@ -87,7 +90,10 @@
   },
   "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e",
   "resolutions": {
-    "axios": "1.15.0",
-    "defu": "6.1.5"
+    "axios": "1.15.2",
+    "defu": "6.1.5",
+    "lodash": "4.18.1",
+    "protobufjs": "7.5.6",
+    "@solana/subscribable": "6.9.0"
   }
 }

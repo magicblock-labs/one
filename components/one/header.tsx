@@ -43,17 +43,17 @@ import {
 const FAQ_ITEMS = [
   {
     value: "item-0",
-    question: "Is MagicBlock Private Payment API a mixer?",
+    question: "Is MagicBlock Shielded Payment API a mixer?",
     answer: (
       <>
         <p>No.</p>
         <p className="mt-3">
-          MagicBlock Private Payment API is not a mixer and does not rely on pooling or
+          MagicBlock Shielded Payment API is not a mixer and does not rely on pooling or
           redistributing user funds to obscure ownership.
         </p>
         <p className="mt-3">
           Funds are first locked in a vault on Solana, and release to the
-          recipient is authorized through a private intent executed inside
+          recipient is authorized through a shielded intent executed inside
           MagicBlock&apos;s ephemeral rollup. This design is intended to obscure
           the direct on-chain link between sender and recipient while supporting
           compliance through permissioned access, policy enforcement, and AML /
@@ -64,17 +64,17 @@ const FAQ_ITEMS = [
   },
   {
     value: "item-1",
-    question: "Are private payments truly private?",
+    question: "Are shielded payments truly shielded?",
     answer: (
       <>
         <p>
-          MagicBlock private payments are designed to provide strong privacy,
+          MagicBlock shielded payments are designed to provide strong privacy,
           but not absolute anonymity.
         </p>
         <p className="mt-3">
           The system obscures the direct on-chain link between sender and
           recipient by separating deposit and payout flows and executing
-          transaction logic privately. However, observers may still see funds
+          transaction logic in a shielded environment. However, observers may still see funds
           entering and exiting the system on Solana and could attempt
           statistical correlation.
         </p>
@@ -106,7 +106,7 @@ const FAQ_ITEMS = [
     question: "How does MagicBlock support compliance?",
     answer: (
       <>
-        <p>MagicBlock Private Payment API is designed to support compliance through:</p>
+        <p>MagicBlock Shielded Payment API is designed to support compliance through:</p>
         <ul className="mt-3 list-disc space-y-1 pl-5">
           <li>Geo-fencing & Policy-based Access Controls</li>
           <li>AML risk screening of wallets and transactions</li>
@@ -124,7 +124,7 @@ const FAQ_ITEMS = [
     answer: (
       <>
         <p>
-          MagicBlock PERs combine execution within the latest Intel Trusted Domain Extension (TDX) with onchain permission access to process private intents securely.
+          MagicBlock PERs combine execution within the latest Intel Trusted Domain Extension (TDX) with onchain permission access to process shielded intents securely.
         </p>
         <p className="mt-3">Users and integrators should consider:</p>
         <ul className="mt-3 list-disc space-y-1 pl-5">
@@ -229,7 +229,7 @@ export function Header() {
 
         {/* Developer API */}
         <a
-          href="https://payments.magicblock.app/"
+          href="https://api.magicblock.app/"
           target="_blank"
           rel="noopener noreferrer"
           className="hidden cursor-pointer items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground sm:flex"
@@ -272,7 +272,7 @@ export function Header() {
             </DropdownMenuItem>
             <DropdownMenuItem asChild className="cursor-pointer gap-2.5">
               <a
-                href="https://payments.magicblock.app/"
+                href="https://api.magicblock.app/"
                 target="_blank"
                 rel="noopener noreferrer"
               >

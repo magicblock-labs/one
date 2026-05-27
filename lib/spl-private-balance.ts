@@ -1,6 +1,16 @@
 import { getPaymentsApiUrl, PAYMENTS_CLUSTER } from "@/lib/payments";
 
 const STORAGE_PREFIX = "magicblock:spl-private-auth-token";
+export const PRIVATE_AUTH_TOKEN_EVENT = "magicblock:spl-private-auth-token";
+
+function dispatchPrivateAuthTokenEvent(pubkeyBase58: string) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent(PRIVATE_AUTH_TOKEN_EVENT, {
+      detail: { pubkey: pubkeyBase58 },
+    }),
+  );
+}
 
 export function getStoredPrivateAuthToken(pubkeyBase58: string): string | null {
   if (typeof window === "undefined") return null;
@@ -13,17 +23,21 @@ export function getStoredPrivateAuthToken(pubkeyBase58: string): string | null {
 
 export function setStoredPrivateAuthToken(pubkeyBase58: string, token: string) {
   localStorage.setItem(`${STORAGE_PREFIX}:${pubkeyBase58}`, token);
+  dispatchPrivateAuthTokenEvent(pubkeyBase58);
 }
 
 export function clearStoredPrivateAuthToken(pubkeyBase58: string) {
   localStorage.removeItem(`${STORAGE_PREFIX}:${pubkeyBase58}`);
+  dispatchPrivateAuthTokenEvent(pubkeyBase58);
 }
 
 export async function fetchSplChallenge(pubkeyBase58: string): Promise<string> {
   const params = new URLSearchParams({
     pubkey: pubkeyBase58,
-    mock: process.env.NEXT_PUBLIC_MOCK_TEE ?? "false",
   });
+  if (PAYMENTS_CLUSTER) {
+    params.set("cluster", PAYMENTS_CLUSTER);
+  }
   const res = await fetch(getPaymentsApiUrl(`/v1/spl/challenge?${params}`));
   if (!res.ok) {
     const text = await res.text();
@@ -46,8 +60,7 @@ export async function loginSplPrivate(params: {
       pubkey: params.pubkey,
       challenge: params.challenge,
       signature: params.signature,
-      cluster: PAYMENTS_CLUSTER,
-      mock: process.env.NEXT_PUBLIC_MOCK_TEE === "true",
+      ...(PAYMENTS_CLUSTER ? { cluster: PAYMENTS_CLUSTER } : {}),
     }),
   });
   if (!res.ok) {
@@ -83,8 +96,10 @@ export async function fetchPrivateBalance(
   const params = new URLSearchParams({
     address: owner,
     mint,
-    cluster: PAYMENTS_CLUSTER,
   });
+  if (PAYMENTS_CLUSTER) {
+    params.set("cluster", PAYMENTS_CLUSTER);
+  }
   const res = await fetch(
     getPaymentsApiUrl(`/v1/spl/private-balance?${params}`),
     { headers: { Authorization: `Bearer ${authToken}` } },

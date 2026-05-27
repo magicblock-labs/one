@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   PAYMENTS_ENDPOINTS,
+  PAYMENTS_CLUSTER,
   getPaymentsApiUrl,
   getPaymentsTimeoutSignal,
 } from "@/lib/payments";
@@ -12,6 +13,13 @@ import {
  *               slippageBps (default 50 = 0.5%)
  */
 export async function GET(request: NextRequest) {
+  if (PAYMENTS_CLUSTER === "devnet") {
+    return NextResponse.json(
+      { error: "Swap is disabled on devnet" },
+      { status: 403 }
+    );
+  }
+
   const { searchParams } = request.nextUrl;
   const inputMint = searchParams.get("inputMint");
   const outputMint = searchParams.get("outputMint");
