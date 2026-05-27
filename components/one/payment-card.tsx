@@ -100,6 +100,11 @@ interface MintInitializationResponse {
   initialized: boolean;
 }
 
+interface TokenBalance {
+  raw: string;
+  formatted: string;
+}
+
 const SWAP_QUERY_PARAMS = ["buy", "sell", "amt"] as const;
 const REQUEST_QUERY_PARAMS = ["prd", "ramt", "rmint"] as const;
 const SPL_TOKEN_ACCOUNT_AMOUNT_OFFSET = 64;
@@ -315,15 +320,28 @@ function hasPositiveBaseUnits(raw: string | null) {
   }
 }
 
-async function fetchFormattedTokenBalance(
+function isSameBaseUnitAmount(left: string | null, right: string | null) {
+  if (!left || !right) return false;
+
+  try {
+    return BigInt(left) === BigInt(right);
+  } catch {
+    return false;
+  }
+}
+
+async function fetchTokenBalance(
   connection: Connection,
   owner: PublicKey,
   tokenMint: string,
   decimals: number
-) {
+): Promise<TokenBalance> {
   if (tokenMint === SOL_MINT) {
     const lamports = await connection.getBalance(owner, "confirmed");
-    return formatTokenBalance(lamports / Math.pow(10, decimals));
+    return {
+      raw: String(lamports),
+      formatted: formatTokenBalance(lamports / Math.pow(10, decimals)),
+    };
   }
 
   const tokenAccounts = await connection.getTokenAccountsByOwner(
@@ -338,7 +356,20 @@ async function fetchFormattedTokenBalance(
   );
   const uiAmount = Number(rawAmount) / Math.pow(10, decimals);
 
-  return formatTokenBalance(uiAmount);
+  return {
+    raw: rawAmount.toString(),
+    formatted: formatTokenBalance(uiAmount),
+  };
+}
+
+async function fetchFormattedTokenBalance(
+  connection: Connection,
+  owner: PublicKey,
+  tokenMint: string,
+  decimals: number
+) {
+  return (await fetchTokenBalance(connection, owner, tokenMint, decimals))
+    .formatted;
 }
 
 const TOKEN_PROGRAM_IDS = [
@@ -401,6 +432,7 @@ export function PaymentCard() {
   const [recipientPrimaryDomain, setRecipientPrimaryDomain] = useState<string | null>(null);
   const [isResolvingRecipient, setIsResolvingRecipient] = useState(false);
   const [walletTokenBalance, setWalletTokenBalance] = useState<string | null>(null);
+  const [walletTokenBalanceRaw, setWalletTokenBalanceRaw] = useState<string | null>(null);
   const [isWalletTokenBalanceLoading, setIsWalletTokenBalanceLoading] = useState(false);
   const [privateAuthToken, setPrivateAuthToken] = useState<string | null>(null);
   const [privateBalanceRaw, setPrivateBalanceRaw] = useState<string | null>(null);
@@ -614,6 +646,7 @@ export function PaymentCard() {
 
     if (!connected || !publicKey) {
       setWalletTokenBalance(null);
+      setWalletTokenBalanceRaw(null);
       setIsWalletTokenBalanceLoading(false);
       return () => {
         cancelled = true;
@@ -624,17 +657,19 @@ export function PaymentCard() {
 
     const fetchWalletTokenBalance = async () => {
       try {
-        const nextBalance = await fetchFormattedTokenBalance(
+        const nextBalance = await fetchTokenBalance(
           connection,
           publicKey,
           tokenMint,
           selectedToken.decimals
         );
         if (cancelled) return;
-        setWalletTokenBalance(nextBalance);
+        setWalletTokenBalance(nextBalance.formatted);
+        setWalletTokenBalanceRaw(nextBalance.raw);
       } catch {
         if (cancelled) return;
         setWalletTokenBalance(null);
+        setWalletTokenBalanceRaw(null);
       } finally {
         if (cancelled) return;
         setIsWalletTokenBalanceLoading(false);
@@ -1065,6 +1100,20 @@ export function PaymentCard() {
     }
   }, [loadPrivateBalance, owner, signMessage]);
 
+  const sourceBalanceRaw =
+    sourceBalance === "ephemeral" ? privateBalanceRaw : walletTokenBalanceRaw;
+  const isSendingMaxSourceBalance =
+    hasPositiveBaseUnits(rawAmount) &&
+    isSameBaseUnitAmount(rawAmount, sourceBalanceRaw);
+  const effectiveExactOut = isSendingMaxSourceBalance ? false : exactOut;
+
+  useEffect(() => {
+    if (!isSendingMaxSourceBalance || !exactOut) return;
+
+    resetResultState();
+    setExactOut(false);
+  }, [exactOut, isSendingMaxSourceBalance, resetResultState]);
+
   const signAndSendUnsignedTransaction = useCallback(
     async (
       unsignedTransaction: UnsignedPaymentTransaction,
@@ -1261,7 +1310,7 @@ export function PaymentCard() {
             : {}),
           ...(isGasless ? { gasless: true } : {}),
           ...(memo ? { memo } : {}),
-          exactOut,
+          exactOut: effectiveExactOut,
           ...(isPrivate
             ? {
               minDelayMs: String(minDelayMs),
@@ -1318,7 +1367,7 @@ export function PaymentCard() {
     recipientBalance,
     isGasless,
     memo,
-    exactOut,
+    effectiveExactOut,
     minDelayMs,
     maxDelayMs,
     split,
@@ -1694,13 +1743,16 @@ export function PaymentCard() {
                         Exact out
                       </div>
                       <div className="text-[11px] text-muted-foreground">
-                        {exactOut
+                        {isSendingMaxSourceBalance
+                          ? "Exact out is disabled when sending the full source balance."
+                          : effectiveExactOut
                           ? "Recipient gets the entered amount. Fees are charged to sender."
                           : "Fees may be deducted from the recipient amount."}
                       </div>
                     </div>
                     <Switch
-                      checked={exactOut}
+                      checked={effectiveExactOut}
+                      disabled={isSendingMaxSourceBalance}
                       onCheckedChange={(enabled) => {
                         setExactOut(enabled);
                         resetResultState();
