@@ -87,6 +87,7 @@ interface UnsignedPaymentTransaction {
   instructionCount: number;
   requiredSigners: string[];
   validator?: string;
+  sendRpcEndpoint?: string;
 }
 
 interface SignedPaymentTransactionResponse {
@@ -103,6 +104,13 @@ interface MintInitializationResponse {
 interface TokenBalance {
   raw: string;
   formatted: string;
+}
+
+interface EataValidatorMismatchFix {
+  owner: string;
+  mint: string;
+  currentValidator?: string;
+  selectedValidator?: string;
 }
 
 const SWAP_QUERY_PARAMS = ["buy", "sell", "amt"] as const;
@@ -263,6 +271,58 @@ function getErrorTransactionSignature(message: string | null) {
   return null;
 }
 
+function getRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function getStringField(record: Record<string, unknown>, field: string) {
+  const value = record[field];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function getEataValidatorMismatchFix(
+  responseBody: unknown
+): EataValidatorMismatchFix | null {
+  const localBody = getRecord(responseBody);
+  if (!localBody) return null;
+
+  const upstreamBody = getRecord(localBody.details) ?? localBody;
+  const error = getRecord(upstreamBody.error);
+  if (getStringField(error ?? {}, "code") !== "EATA_VALIDATOR_MISMATCH") {
+    return null;
+  }
+
+  const details = getRecord(error?.details);
+  const accounts = Array.isArray(details?.accounts) ? details.accounts : [];
+  const account =
+    accounts
+      .map(getRecord)
+      .find(row => row && getStringField(row, "role") === "source")
+    ?? accounts.map(getRecord).find(Boolean);
+  if (!account) return null;
+
+  const owner = getStringField(account, "owner");
+  const mint = getStringField(account, "mint");
+  if (!owner || !mint) return null;
+
+  return {
+    owner,
+    mint,
+    currentValidator: getStringField(account, "currentValidator") ?? undefined,
+    selectedValidator: getStringField(account, "selectedValidator") ?? undefined,
+  };
+}
+
+function formatEataValidatorMismatchMessage(fix: EataValidatorMismatchFix) {
+  if (fix.currentValidator && fix.selectedValidator) {
+    return `Shielded account is delegated to ${shortenAddress(fix.currentValidator)}, not ${shortenAddress(fix.selectedValidator)}.`;
+  }
+
+  return "Shielded account is delegated to another validator.";
+}
+
 function getErrorTransactionLabel(message: string | null) {
   const expiredMatch = message?.match(
     /^Signature\s+[1-9A-HJ-NP-Za-km-z]{64,}\s+has expired:\s*(.+)$/
@@ -285,6 +345,24 @@ function getExplorerTransactionHref(
   }
 
   return `/api/explorer/tx?${params.toString()}`;
+}
+
+function getAuthenticatedConfirmationWsEndpoint(
+  rpcEndpoint: string,
+  authToken: string
+) {
+  const wsEndpoint = new URL(rpcEndpoint);
+
+  if (wsEndpoint.protocol === "https:") {
+    wsEndpoint.protocol = "wss:";
+  } else if (wsEndpoint.protocol === "http:") {
+    wsEndpoint.protocol = "ws:";
+  } else if (wsEndpoint.protocol !== "wss:" && wsEndpoint.protocol !== "ws:") {
+    throw new Error("Unsupported confirmation RPC endpoint protocol");
+  }
+
+  wsEndpoint.searchParams.set("token", authToken);
+  return wsEndpoint.toString();
 }
 
 function formatTokenBalance(value: number) {
@@ -455,6 +533,10 @@ export function PaymentCard() {
     string | null
   >(null);
   const [error, setError] = useState<string | null>(null);
+  const [validatorMismatchFix, setValidatorMismatchFix] =
+    useState<EataValidatorMismatchFix | null>(null);
+  const [isUndelegatingEata, setIsUndelegatingEata] = useState(false);
+  const [undelegateEataError, setUndelegateEataError] = useState<string | null>(null);
   const gaslessAutoOptOutRef = useRef(false);
 
   const { tokens } = useAggregatorTokens();
@@ -510,6 +592,8 @@ export function PaymentCard() {
       return "idle";
     });
     setError(null);
+    setValidatorMismatchFix(null);
+    setUndelegateEataError(null);
     setTxSignature(null);
     setTxExplorerRpcEndpoint(null);
   }, []);
@@ -1074,22 +1158,36 @@ export function PaymentCard() {
     [ensurePrivateRoutingDefaults, resetResultState]
   );
 
+  const authenticatePrivateAccess = useCallback(async () => {
+    if (!owner || !signMessage) {
+      throw new Error("Wallet does not support shielded authentication");
+    }
+
+    const challenge = await fetchSplChallenge(owner);
+    const message = new TextEncoder().encode(challenge);
+    const sigBytes = await signMessage(message);
+    const token = await loginSplPrivate({
+      pubkey: owner,
+      challenge,
+      signature: bs58.encode(sigBytes),
+    });
+    setStoredPrivateAuthToken(owner, token);
+    setPrivateAuthToken(token);
+    return token;
+  }, [owner, signMessage]);
+
+  const ensurePrivateAuthToken = useCallback(async () => {
+    if (privateAuthToken) return privateAuthToken;
+    return authenticatePrivateAccess();
+  }, [authenticatePrivateAccess, privateAuthToken]);
+
   const handlePrivateBalanceAuthenticate = useCallback(async () => {
     if (!owner || !signMessage) return;
 
     setPrivateAuthBusy(true);
     setPrivateAuthError(null);
     try {
-      const challenge = await fetchSplChallenge(owner);
-      const message = new TextEncoder().encode(challenge);
-      const sigBytes = await signMessage(message);
-      const token = await loginSplPrivate({
-        pubkey: owner,
-        challenge,
-        signature: bs58.encode(sigBytes),
-      });
-      setStoredPrivateAuthToken(owner, token);
-      setPrivateAuthToken(token);
+      const token = await authenticatePrivateAccess();
       await loadPrivateBalance(token);
     } catch (error) {
       setPrivateAuthError(
@@ -1098,7 +1196,7 @@ export function PaymentCard() {
     } finally {
       setPrivateAuthBusy(false);
     }
-  }, [loadPrivateBalance, owner, signMessage]);
+  }, [authenticatePrivateAccess, loadPrivateBalance, owner, signMessage]);
 
   const sourceBalanceRaw =
     sourceBalance === "ephemeral" ? privateBalanceRaw : walletTokenBalanceRaw;
@@ -1157,6 +1255,9 @@ export function PaymentCard() {
           body: JSON.stringify({
             transactionBase64: signedTransactionBase64,
             sendTo: unsignedTransaction.sendTo,
+            ...(unsignedTransaction.sendRpcEndpoint
+              ? { sendRpcEndpoint: unsignedTransaction.sendRpcEndpoint }
+              : {}),
           }),
         });
 
@@ -1177,14 +1278,23 @@ export function PaymentCard() {
 
         setTxSignature(sendJson.signature);
         setTxExplorerRpcEndpoint(sendJson.confirmationRpcEndpoint);
+        const confirmationAuthToken = options?.authToken?.trim() ?? "";
+        if (sendJson.confirmationRequiresAuthToken && !confirmationAuthToken) {
+          throw new Error("Transaction confirmation requires authentication");
+        }
+        const shouldAuthenticateConfirmation = Boolean(confirmationAuthToken);
         const confirmationConnection = new Connection(
           sendJson.confirmationRpcEndpoint,
           {
             commitment: "confirmed",
-            ...(sendJson.confirmationRequiresAuthToken && options?.authToken
+            ...(shouldAuthenticateConfirmation
               ? {
+                  wsEndpoint: getAuthenticatedConfirmationWsEndpoint(
+                    sendJson.confirmationRpcEndpoint,
+                    confirmationAuthToken
+                  ),
                   httpHeaders: {
-                    Authorization: `Bearer ${options.authToken}`,
+                    Authorization: `Bearer ${confirmationAuthToken}`,
                   },
                 }
               : {}),
@@ -1278,6 +1388,66 @@ export function PaymentCard() {
     signAndSendUnsignedTransaction,
   ]);
 
+  const handleUndelegateEata = useCallback(async () => {
+    if (!publicKey || !signTransaction || !connected || !validatorMismatchFix) {
+      return;
+    }
+
+    setIsUndelegatingEata(true);
+    setUndelegateEataError(null);
+    setTxSignature(null);
+    setTxExplorerRpcEndpoint(null);
+
+    try {
+      const authToken = await ensurePrivateAuthToken();
+      const buildRes = await fetch("/api/payments/undelegate-ephemeral-ata", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          payer: validatorMismatchFix.owner,
+          mint: validatorMismatchFix.mint,
+        }),
+      });
+
+      const responseBody = await buildRes.json().catch(() => ({}));
+      if (!buildRes.ok) {
+        throw new Error(
+          responseBody.error || `Undelegate failed: ${buildRes.status}`
+        );
+      }
+
+      await signAndSendUnsignedTransaction(
+        responseBody as UnsignedPaymentTransaction,
+        undefined,
+        { authToken, submitViaPaymentsApi: true }
+      );
+
+      setValidatorMismatchFix(null);
+      setError("Delegation fixed. Retry the payment.");
+      setStatus("error");
+      dispatchPrivateBalanceRefresh();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Undelegation failed";
+      setUndelegateEataError(
+        message.includes("User rejected")
+          ? "Transaction rejected by user"
+          : message
+      );
+    } finally {
+      setIsUndelegatingEata(false);
+    }
+  }, [
+    publicKey,
+    signTransaction,
+    connected,
+    validatorMismatchFix,
+    ensurePrivateAuthToken,
+    signAndSendUnsignedTransaction,
+  ]);
+
   const handleSend = useCallback(async () => {
     if (!publicKey || !signTransaction || !connected) return;
     if (!resolvedReceiver || isResolvingRecipient) return;
@@ -1285,6 +1455,8 @@ export function PaymentCard() {
 
     setStatus("building");
     setError(null);
+    setValidatorMismatchFix(null);
+    setUndelegateEataError(null);
     setTxSignature(null);
     setTxExplorerRpcEndpoint(null);
 
@@ -1324,6 +1496,11 @@ export function PaymentCard() {
 
       if (!buildRes.ok) {
         const errData = await buildRes.json().catch(() => ({}));
+        const mismatchFix = getEataValidatorMismatchFix(errData);
+        if (mismatchFix) {
+          setValidatorMismatchFix(mismatchFix);
+          throw new Error(formatEataValidatorMismatchMessage(mismatchFix));
+        }
         throw new Error(errData.error || `Build failed: ${buildRes.status}`);
       }
 
@@ -1381,6 +1558,8 @@ export function PaymentCard() {
     setTxSignature(null);
     setTxExplorerRpcEndpoint(null);
     setError(null);
+    setValidatorMismatchFix(null);
+    setUndelegateEataError(null);
     setAmount("");
     setMemo("");
   }, []);
@@ -1817,39 +1996,66 @@ export function PaymentCard() {
           {/* Error */}
           {
             error && status === "error" && (
-              <div className="mx-3 mt-2 flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/20">
-                {errorTransactionSignature ? (
-                  <a
-                    href={getExplorerTransactionHref(
-                      errorTransactionSignature,
-                      txExplorerRpcEndpoint
-                    )}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="min-w-0 inline-flex items-center gap-1 text-xs text-destructive hover:underline"
-                  >
-                    <span>{getErrorTransactionLabel(error)}:</span>
-                    <span className="font-mono">
-                      {shortenAddress(errorTransactionSignature)}
+              <div className="mx-3 mt-2 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/20">
+                <div className="flex items-center justify-between gap-3">
+                  {errorTransactionSignature ? (
+                    <a
+                      href={getExplorerTransactionHref(
+                        errorTransactionSignature,
+                        txExplorerRpcEndpoint
+                      )}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="min-w-0 inline-flex items-center gap-1 text-xs text-destructive hover:underline"
+                    >
+                      <span>{getErrorTransactionLabel(error)}:</span>
+                      <span className="font-mono">
+                        {shortenAddress(errorTransactionSignature)}
+                      </span>
+                      <ExternalLink className="h-3 w-3 shrink-0" />
+                    </a>
+                  ) : (
+                    <span className="text-xs text-destructive">{error}</span>
+                  )}
+                  {errorTxSignature && !errorTransactionSignature && (
+                    <a
+                      href={getExplorerTransactionHref(
+                        errorTxSignature,
+                        txExplorerRpcEndpoint
+                      )}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="shrink-0 flex items-center gap-1 text-xs text-destructive hover:underline"
+                    >
+                      View tx
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+                {validatorMismatchFix && (
+                  <div className="mt-2 flex flex-col gap-2 border-t border-destructive/15 pt-2 sm:flex-row sm:items-center sm:justify-between">
+                    <span className="text-xs text-destructive/90">
+                      Undelegate from the current validator, then retry.
                     </span>
-                    <ExternalLink className="h-3 w-3 shrink-0" />
-                  </a>
-                ) : (
-                  <span className="text-xs text-destructive">{error}</span>
+                    <button
+                      type="button"
+                      onClick={handleUndelegateEata}
+                      disabled={isUndelegatingEata}
+                      className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-md border border-destructive/30 bg-background px-3 text-xs font-semibold text-destructive transition-colors hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/40 disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      {isUndelegatingEata ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <ShieldCheck className="h-3.5 w-3.5" />
+                      )}
+                      {isUndelegatingEata ? "Fixing..." : "Fix delegation"}
+                    </button>
+                  </div>
                 )}
-                {errorTxSignature && !errorTransactionSignature && (
-                  <a
-                    href={getExplorerTransactionHref(
-                      errorTxSignature,
-                      txExplorerRpcEndpoint
-                    )}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="shrink-0 flex items-center gap-1 text-xs text-destructive hover:underline"
-                  >
-                    View tx
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
+                {undelegateEataError && (
+                  <div className="mt-2 text-xs text-destructive">
+                    {undelegateEataError}
+                  </div>
                 )}
               </div>
             )
