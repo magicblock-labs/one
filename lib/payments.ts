@@ -58,6 +58,7 @@ export const PAYMENTS_ENDPOINTS = {
   initializeMint: "/v1/spl/initialize-mint",
   isMintInitialized: "/v1/spl/is-mint-initialized",
   splTransfer: "/v1/spl/transfer",
+  undelegateEphemeralAta: "/v1/spl/undelegate-ephemeral-ata",
   transactionSend: "/v1/transaction/send",
   swapQuote: "/v1/swap/quote",
   swap: "/v1/swap/swap",

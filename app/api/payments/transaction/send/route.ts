@@ -10,6 +10,7 @@ import { getPaymentsErrorMessage } from "@/lib/payments-errors";
 interface PaymentTransactionSendRequest {
   transactionBase64?: string;
   sendTo?: "base" | "ephemeral";
+  sendRpcEndpoint?: string;
 }
 
 export async function POST(request: NextRequest) {
@@ -18,6 +19,7 @@ export async function POST(request: NextRequest) {
     const {
       transactionBase64,
       sendTo,
+      sendRpcEndpoint,
     } = body;
     const authorization = request.headers.get("authorization")?.trim() ?? "";
 
@@ -39,11 +41,79 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    let resolvedSendRpcEndpoint: string | undefined;
+    if (sendRpcEndpoint !== undefined) {
+      try {
+        const url = new URL(sendRpcEndpoint);
+        if (url.protocol !== "http:" && url.protocol !== "https:") {
+          throw new Error("Invalid protocol");
+        }
+        resolvedSendRpcEndpoint = url.toString();
+      } catch {
+        return NextResponse.json(
+          { error: "Invalid send RPC endpoint" },
+          { status: 400 }
+        );
+      }
+    }
+
     const upstreamHeaders: HeadersInit = {
       "Content-Type": "application/json",
     };
     if (authorization) {
       upstreamHeaders.Authorization = authorization;
+    }
+
+    if (resolvedSendRpcEndpoint) {
+      const rpcRes = await fetch(resolvedSendRpcEndpoint, {
+        method: "POST",
+        headers: upstreamHeaders,
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "sendTransaction",
+          params: [
+            transactionBase64,
+            {
+              encoding: "base64",
+              preflightCommitment: "confirmed",
+            },
+          ],
+        }),
+        signal: getPaymentsTimeoutSignal(30_000),
+        cache: "no-store",
+      });
+
+      const responseBody = await rpcRes.json().catch(() => null);
+      if (!rpcRes.ok || responseBody?.error) {
+        return NextResponse.json(
+          {
+            error: responseBody?.error?.message
+              ?? responseBody?.error
+              ?? `Send failed: ${rpcRes.status}`,
+            details: responseBody,
+          },
+          { status: rpcRes.ok ? 502 : rpcRes.status }
+        );
+      }
+
+      if (typeof responseBody?.result !== "string") {
+        return NextResponse.json(
+          {
+            error: "Send response did not include a signature",
+            details: responseBody,
+          },
+          { status: 502 }
+        );
+      }
+
+      return NextResponse.json({
+        signature: responseBody.result,
+        sendTo,
+        confirmed: false,
+        confirmationRpcEndpoint: resolvedSendRpcEndpoint,
+        confirmationRequiresAuthToken: sendTo === "ephemeral",
+      });
     }
 
     const upstreamRes = await fetch(
