@@ -283,14 +283,24 @@ function getStringField(record: Record<string, unknown>, field: string) {
 }
 
 function getEataValidatorMismatchFix(
-  responseBody: unknown
+  responseBody: unknown,
+  fallback?: Pick<EataValidatorMismatchFix, "owner" | "mint">
 ): EataValidatorMismatchFix | null {
   const localBody = getRecord(responseBody);
   if (!localBody) return null;
 
   const upstreamBody = getRecord(localBody.details) ?? localBody;
   const error = getRecord(upstreamBody.error);
-  if (getStringField(error ?? {}, "code") !== "EATA_VALIDATOR_MISMATCH") {
+  const errorMessage =
+    getStringField(localBody, "error") ??
+    getStringField(upstreamBody, "error") ??
+    getStringField(upstreamBody, "message") ??
+    getStringField(error ?? {}, "message") ??
+    "";
+  const isValidatorMismatch =
+    getStringField(error ?? {}, "code") === "EATA_VALIDATOR_MISMATCH" ||
+    errorMessage.toLowerCase().includes("eata is delegated to a different validator");
+  if (!isValidatorMismatch) {
     return null;
   }
 
@@ -301,17 +311,20 @@ function getEataValidatorMismatchFix(
       .map(getRecord)
       .find(row => row && getStringField(row, "role") === "source")
     ?? accounts.map(getRecord).find(Boolean);
-  if (!account) return null;
 
-  const owner = getStringField(account, "owner");
-  const mint = getStringField(account, "mint");
+  const owner = account ? getStringField(account, "owner") : fallback?.owner;
+  const mint = account ? getStringField(account, "mint") : fallback?.mint;
   if (!owner || !mint) return null;
 
   return {
     owner,
     mint,
-    currentValidator: getStringField(account, "currentValidator") ?? undefined,
-    selectedValidator: getStringField(account, "selectedValidator") ?? undefined,
+    currentValidator: account
+      ? getStringField(account, "currentValidator") ?? undefined
+      : undefined,
+    selectedValidator: account
+      ? getStringField(account, "selectedValidator") ?? undefined
+      : undefined,
   };
 }
 
@@ -1496,7 +1509,10 @@ export function PaymentCard() {
 
       if (!buildRes.ok) {
         const errData = await buildRes.json().catch(() => ({}));
-        const mismatchFix = getEataValidatorMismatchFix(errData);
+        const mismatchFix = getEataValidatorMismatchFix(errData, {
+          owner: publicKey.toBase58(),
+          mint: tokenMint,
+        });
         if (mismatchFix) {
           setValidatorMismatchFix(mismatchFix);
           throw new Error(formatEataValidatorMismatchMessage(mismatchFix));
