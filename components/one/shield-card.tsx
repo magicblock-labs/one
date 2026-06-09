@@ -821,7 +821,9 @@ export function ShieldCard() {
         if (sendJson.confirmationRequiresAuthToken && !confirmationAuthToken) {
           throw new Error("Transaction confirmation requires authentication");
         }
-        const shouldAuthenticateConfirmation = Boolean(confirmationAuthToken);
+        const shouldAuthenticateConfirmation =
+          sendJson.confirmationRequiresAuthToken &&
+          Boolean(confirmationAuthToken);
         const confirmationConnection = new Connection(
           sendJson.confirmationRpcEndpoint,
           {
