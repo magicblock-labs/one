@@ -9,7 +9,6 @@ import {
   CircleHelp,
   ChevronDown,
   Settings2,
-  Shield,
   ShieldCheck,
   User,
   AlertTriangle,
@@ -53,7 +52,6 @@ import {
   formatPrivateRoutingSummary,
 } from "@/lib/private-routing";
 import { PrivateRoutingControls } from "./private-routing-controls";
-import { Slider } from "@/components/ui/slider";
 import {
   Popover,
   PopoverContent,
@@ -75,6 +73,7 @@ type PaymentStatus =
   | "sending"
   | "confirmed"
   | "error";
+
 type BalanceLocation = "base" | "ephemeral";
 type DestinationEataStatus = "idle" | "checking" | "exists" | "missing" | "error";
 
@@ -285,7 +284,7 @@ function getErrorTransactionSignature(message: string | null) {
 
 function getRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object"
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : null;
 }
 
@@ -303,15 +302,20 @@ function getEataValidatorMismatchFix(
 
   const upstreamBody = getRecord(localBody.details) ?? localBody;
   const error = getRecord(upstreamBody.error);
+
   const errorMessage =
     getStringField(localBody, "error") ??
     getStringField(upstreamBody, "error") ??
     getStringField(upstreamBody, "message") ??
     getStringField(error ?? {}, "message") ??
     "";
+
   const isValidatorMismatch =
     getStringField(error ?? {}, "code") === "EATA_VALIDATOR_MISMATCH" ||
-    errorMessage.toLowerCase().includes("eata is delegated to a different validator");
+    errorMessage
+      .toLowerCase()
+      .includes("eata is delegated to a different validator");
+
   if (!isValidatorMismatch) {
     return null;
   }
@@ -321,11 +325,12 @@ function getEataValidatorMismatchFix(
   const account =
     accounts
       .map(getRecord)
-      .find(row => row && getStringField(row, "role") === "source")
-    ?? accounts.map(getRecord).find(Boolean);
+      .find((row) => row && getStringField(row, "role") === "source") ??
+    accounts.map(getRecord).find(Boolean);
 
   const owner = account ? getStringField(account, "owner") : fallback?.owner;
   const mint = account ? getStringField(account, "mint") : fallback?.mint;
+
   if (!owner || !mint) return null;
 
   return {
@@ -479,6 +484,7 @@ const TOKEN_PROGRAM_IDS = [
   new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
   new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
 ];
+
 const DEFAULT_MIN_DELAY_MS = 3_000;
 const DEFAULT_MAX_DELAY_MS = 30_000;
 
@@ -494,21 +500,36 @@ export function PaymentCard() {
     !searchParams.has("public");
   const searchMint = searchParams.get("mint")?.trim() ?? "";
   const initialMinDelayMs = isInitiallyPrivate
-    ? parseIntegerParam(searchParams.get("min"), DEFAULT_MIN_DELAY_MS, 0, MAX_PRIVATE_DELAY_MS)
+    ? parseIntegerParam(
+        searchParams.get("min"),
+        DEFAULT_MIN_DELAY_MS,
+        0,
+        MAX_PRIVATE_DELAY_MS
+      )
     : 0;
   const initialMaxDelayMs = isInitiallyPrivate
     ? Math.max(
-      initialMinDelayMs,
-      parseIntegerParam(searchParams.get("max"), DEFAULT_MAX_DELAY_MS, 0, MAX_PRIVATE_DELAY_MS)
-    )
+        initialMinDelayMs,
+        parseIntegerParam(
+          searchParams.get("max"),
+          DEFAULT_MAX_DELAY_MS,
+          0,
+          MAX_PRIVATE_DELAY_MS
+        )
+      )
     : 0;
   const initialSplit = isInitiallyPrivate
     ? clampPrivateSplit(parseIntegerParam(searchParams.get("split"), 1, 1, 10))
     : 1;
   const initialGasless = searchParams.get("gasless") === "1";
   const { connection } = useConnection();
-  const { connected, openConnectModal, publicKey, signMessage, signTransaction } =
-    useUnifiedWallet();
+  const {
+    connected,
+    openConnectModal,
+    publicKey,
+    signMessage,
+    signTransaction,
+  } = useUnifiedWallet();
   const owner = publicKey?.toBase58() ?? null;
 
   const [tokenMint, setTokenMint] = useState(() =>
@@ -531,24 +552,47 @@ export function PaymentCard() {
     () => initialGasless || Boolean(searchParams.get("memo"))
   );
   const [modalOpen, setModalOpen] = useState(false);
-  const [resolvedDomainAddress, setResolvedDomainAddress] = useState<string | null>(null);
-  const [recipientPrimaryDomain, setRecipientPrimaryDomain] = useState<string | null>(null);
+  const [resolvedDomainAddress, setResolvedDomainAddress] = useState<
+    string | null
+  >(null);
+  const [recipientPrimaryDomain, setRecipientPrimaryDomain] = useState<
+    string | null
+  >(null);
   const [isResolvingRecipient, setIsResolvingRecipient] = useState(false);
-  const [walletTokenBalance, setWalletTokenBalance] = useState<string | null>(null);
-  const [walletTokenBalanceRaw, setWalletTokenBalanceRaw] = useState<string | null>(null);
-  const [isWalletTokenBalanceLoading, setIsWalletTokenBalanceLoading] = useState(false);
+  const [walletTokenBalance, setWalletTokenBalance] = useState<string | null>(
+    null
+  );
+  const [walletTokenBalanceRaw, setWalletTokenBalanceRaw] = useState<
+    string | null
+  >(null);
+  const [isWalletTokenBalanceLoading, setIsWalletTokenBalanceLoading] =
+    useState(false);
   const [privateAuthToken, setPrivateAuthToken] = useState<string | null>(null);
-  const [privateBalanceRaw, setPrivateBalanceRaw] = useState<string | null>(null);
+  const [privateBalanceRaw, setPrivateBalanceRaw] = useState<string | null>(
+    null
+  );
   const [isPrivateBalanceLoading, setIsPrivateBalanceLoading] = useState(false);
-  const [privateBalanceError, setPrivateBalanceError] = useState<string | null>(null);
+  const [privateBalanceError, setPrivateBalanceError] = useState<string | null>(
+    null
+  );
   const [privateAuthBusy, setPrivateAuthBusy] = useState(false);
   const [privateAuthChecked, setPrivateAuthChecked] = useState(false);
   const [privateAuthError, setPrivateAuthError] = useState<string | null>(null);
-  const [walletSolLamports, setWalletSolLamports] = useState<number | null>(null);
-  const [recipientTokenBalance, setRecipientTokenBalance] = useState<string | null>(null);
-  const [isRecipientTokenBalanceLoading, setIsRecipientTokenBalanceLoading] = useState(false);
-  const [isMintInitialized, setIsMintInitialized] = useState<boolean | null>(null);
-  const [isMintInitializationLoading, setIsMintInitializationLoading] = useState(false);
+  const [walletSolLamports, setWalletSolLamports] = useState<number | null>(
+    null
+  );
+  const [recipientTokenBalance, setRecipientTokenBalance] = useState<
+    string | null
+  >(null);
+  const [
+    isRecipientTokenBalanceLoading,
+    setIsRecipientTokenBalanceLoading,
+  ] = useState(false);
+  const [isMintInitialized, setIsMintInitialized] = useState<boolean | null>(
+    null
+  );
+  const [isMintInitializationLoading, setIsMintInitializationLoading] =
+    useState(false);
   const [isSettingUpMint, setIsSettingUpMint] = useState(false);
   const [mintSetupError, setMintSetupError] = useState<string | null>(null);
 
@@ -561,13 +605,17 @@ export function PaymentCard() {
   const [validatorMismatchFix, setValidatorMismatchFix] =
     useState<EataValidatorMismatchFix | null>(null);
   const [isUndelegatingEata, setIsUndelegatingEata] = useState(false);
-  const [undelegateEataError, setUndelegateEataError] = useState<string | null>(null);
+  const [undelegateEataError, setUndelegateEataError] = useState<string | null>(
+    null
+  );
   const [destinationEataStatus, setDestinationEataStatus] =
     useState<DestinationEataStatus>("idle");
   const [isSettingUpDestinationEata, setIsSettingUpDestinationEata] =
     useState(false);
-  const [destinationEataError, setDestinationEataError] =
-    useState<string | null>(null);
+  const [destinationEataError, setDestinationEataError] = useState<
+    string | null
+  >(null);
+
   const gaslessAutoOptOutRef = useRef(false);
 
   const { tokens } = useAggregatorTokens();
@@ -613,13 +661,16 @@ export function PaymentCard() {
   const routingSummary = useMemo(() => {
     return formatPrivateRoutingSummary(split, minDelayMs, maxDelayMs);
   }, [split, minDelayMs, maxDelayMs]);
+
   const shouldCheckDestinationEata =
     sourceBalance === "ephemeral" &&
     recipientBalance === "ephemeral" &&
     Boolean(resolvedReceiver) &&
     !isResolvingRecipient;
+
   const isDestinationEataChecking =
     shouldCheckDestinationEata && destinationEataStatus === "checking";
+
   const requiresDestinationEataSetup =
     shouldCheckDestinationEata && destinationEataStatus === "missing";
 
@@ -719,12 +770,7 @@ export function PaymentCard() {
     return () => {
       cancelled = true;
     };
-  }, [
-    connection,
-    trimmedReceiver,
-    directReceiverAddress,
-    isDomainReceiver,
-  ]);
+  }, [connection, trimmedReceiver, directReceiverAddress, isDomainReceiver]);
 
   useEffect(() => {
     let cancelled = false;
@@ -863,7 +909,9 @@ export function PaymentCard() {
         setPrivateBalanceRaw(row.balance);
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : "Failed to load shielded balance";
+          error instanceof Error
+            ? error.message
+            : "Failed to load shielded balance";
         const mismatchFix = getEataValidatorMismatchFix(
           { error: message },
           { owner, mint: tokenMint }
@@ -1225,16 +1273,24 @@ export function PaymentCard() {
       }
       setIsPrivate(enabled);
     },
-    [ensurePrivateRoutingDefaults, recipientBalance, resetResultState, sourceBalance]
+    [
+      ensurePrivateRoutingDefaults,
+      recipientBalance,
+      resetResultState,
+      sourceBalance,
+    ]
   );
 
-  const handleSourceBalanceChange = useCallback((nextBalance: BalanceLocation) => {
-    resetResultState();
-    setSourceBalance(nextBalance);
-    if (nextBalance === "ephemeral") {
-      setIsPrivate(true);
-    }
-  }, [resetResultState]);
+  const handleSourceBalanceChange = useCallback(
+    (nextBalance: BalanceLocation) => {
+      resetResultState();
+      setSourceBalance(nextBalance);
+      if (nextBalance === "ephemeral") {
+        setIsPrivate(true);
+      }
+    },
+    [resetResultState]
+  );
 
   const handleRecipientBalanceChange = useCallback(
     (nextBalance: BalanceLocation) => {
@@ -1319,13 +1375,16 @@ export function PaymentCard() {
       const shouldSubmitViaPaymentsApi =
         options?.submitViaPaymentsApi ||
         unsignedTransaction.sendTo === "ephemeral";
-      const transaction = deserializeUnsignedPaymentTransaction(unsignedTransaction);
+      const transaction =
+        deserializeUnsignedPaymentTransaction(unsignedTransaction);
+
       if (shouldSubmitViaPaymentsApi) {
         preparePaymentTransactionForSigning(
           transaction,
           unsignedTransaction.recentBlockhash
         );
       }
+
       const signedTransaction = await signTransaction(transaction);
 
       onBeforeSend?.();
@@ -1354,6 +1413,7 @@ export function PaymentCard() {
         const sendJson = (await sendRes.json().catch(
           () => ({})
         )) as SignedPaymentTransactionResponse;
+
         if (!sendRes.ok) {
           const mismatchFix = getEataValidatorMismatchFix(sendJson, {
             owner: publicKey.toBase58(),
@@ -1367,19 +1427,25 @@ export function PaymentCard() {
             sendJson.error ? sendJson.error : `Send failed: ${sendRes.status}`
           );
         }
+
         if (!sendJson.signature) {
           throw new Error("Send response did not include a signature");
         }
+
         if (!sendJson.confirmationRpcEndpoint) {
-          throw new Error("Send response did not include a confirmation RPC endpoint");
+          throw new Error(
+            "Send response did not include a confirmation RPC endpoint"
+          );
         }
 
         setTxSignature(sendJson.signature);
         setTxExplorerRpcEndpoint(sendJson.confirmationRpcEndpoint);
+
         const confirmationAuthToken = options?.authToken?.trim() ?? "";
         if (sendJson.confirmationRequiresAuthToken && !confirmationAuthToken) {
           throw new Error("Transaction confirmation requires authentication");
         }
+
         const shouldAuthenticateConfirmation = Boolean(confirmationAuthToken);
         const confirmationConnection = new Connection(
           sendJson.confirmationRpcEndpoint,
@@ -1398,6 +1464,7 @@ export function PaymentCard() {
               : {}),
           }
         );
+
         const confirmation = await confirmationConnection.confirmTransaction(
           {
             signature: sendJson.signature,
@@ -1421,6 +1488,7 @@ export function PaymentCard() {
           maxRetries: 10,
         }
       );
+
       setTxSignature(signature);
       setTxExplorerRpcEndpoint(null);
 
@@ -1511,6 +1579,7 @@ export function PaymentCard() {
       });
 
       const responseBody = await buildRes.json().catch(() => ({}));
+
       if (!buildRes.ok) {
         throw new Error(
           responseBody.error || `Undelegate failed: ${buildRes.status}`
@@ -1528,7 +1597,8 @@ export function PaymentCard() {
       setStatus("error");
       dispatchPrivateBalanceRefresh();
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Undelegation failed";
+      const message =
+        err instanceof Error ? err.message : "Undelegation failed";
       setUndelegateEataError(
         message.includes("User rejected")
           ? "Transaction rejected by user"
@@ -1648,14 +1718,13 @@ export function PaymentCard() {
           exactOut: effectiveExactOut,
           ...(isPrivate
             ? {
-              minDelayMs: String(minDelayMs),
-              maxDelayMs: String(maxDelayMs),
-              split,
-            }
+                minDelayMs: String(minDelayMs),
+                maxDelayMs: String(maxDelayMs),
+                split,
+              }
             : {}),
         }),
       });
-
 
       if (!buildRes.ok) {
         const errData = await buildRes.json().catch(() => ({}));
@@ -1671,7 +1740,6 @@ export function PaymentCard() {
       }
 
       const jsonResponse = await buildRes.json();
-
       const unsignedTransaction = jsonResponse as UnsignedPaymentTransaction;
 
       setStatus("signing");
@@ -1683,6 +1751,7 @@ export function PaymentCard() {
           submitViaPaymentsApi: sourceBalance === "ephemeral",
         }
       );
+
       setTxSignature(signature);
       setStatus("confirmed");
       dispatchPrivateBalanceRefresh();
@@ -1699,7 +1768,6 @@ export function PaymentCard() {
     publicKey,
     signTransaction,
     connected,
-    isValidReceiver,
     rawAmount,
     resolvedReceiver,
     tokenMint,
@@ -1713,7 +1781,6 @@ export function PaymentCard() {
     minDelayMs,
     maxDelayMs,
     split,
-    connection,
     isResolvingRecipient,
     isDestinationEataChecking,
     requiresDestinationEataSetup,
@@ -1751,6 +1818,7 @@ export function PaymentCard() {
   useEffect(() => {
     const hasLoadedPrivateBalance =
       privateBalanceRaw !== null || Boolean(privateBalanceError);
+
     if (
       sourceBalance === "ephemeral" &&
       privateAuthChecked &&
@@ -1759,6 +1827,7 @@ export function PaymentCard() {
       setSourceBalance("base");
       return;
     }
+
     if (
       sourceBalance === "ephemeral" &&
       privateAuthToken &&
@@ -1782,11 +1851,12 @@ export function PaymentCard() {
     <>
       <div className="w-full max-w-[480px] mx-auto">
         <div className="rounded-2xl bg-[var(--surface-container)] border border-border/40 shadow-xl shadow-black/30 overflow-hidden">
-          {/* Send Section */}
           <div className="mx-3 mt-3 mb-1">
             <div className="rounded-xl bg-[var(--surface-inner)] border border-border/50 p-4">
               <div className="relative mb-3 h-4">
-                <div className="text-xs leading-4 text-muted-foreground">You send</div>
+                <div className="text-xs leading-4 text-muted-foreground">
+                  You send
+                </div>
                 {canSendFromPrivateBalance && (
                   <fieldset className="absolute right-0 top-1/2 grid -translate-y-1/2 grid-cols-2 gap-0.5 rounded-md bg-secondary/60 p-px">
                     <legend className="sr-only">Payment source balance</legend>
@@ -1828,11 +1898,9 @@ export function PaymentCard() {
               </div>
               <div className="flex items-center justify-between">
                 <div>
-                  {/* Temporary: restore onClick, hover styles, and ChevronDown below to re-enable token selection. */}
                   <button
                     disabled
-                    className="flex items-center gap-2.5 px-3
-                     py-2 rounded-xl bg-accent/60 transition-colors cursor-default"
+                    className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-accent/60 transition-colors cursor-default"
                   >
                     {selectedToken.logoURI ? (
                       <img
@@ -1849,7 +1917,6 @@ export function PaymentCard() {
                     <span className="text-foreground font-semibold text-sm">
                       {selectedToken.symbol}
                     </span>
-                    {/* <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" /> */}
                   </button>
                   {connected && publicKey && (
                     <div className="mt-1 px-1 text-xs text-muted-foreground">
@@ -1908,17 +1975,23 @@ export function PaymentCard() {
                     className="bg-transparent text-right text-2xl font-light text-muted-foreground/50 placeholder:text-muted-foreground/30 outline-none w-32 focus:text-foreground"
                   />
                   <div className="text-xs text-muted-foreground mt-1">
-                    ${amountUsd > 0 ? amountUsd.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "0"}
+                    $
+                    {amountUsd > 0
+                      ? amountUsd.toLocaleString(undefined, {
+                          maximumFractionDigits: 2,
+                        })
+                      : "0"}
                   </div>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Receiver Section */}
           <div className="mx-3 mt-2">
             <div className="rounded-xl bg-[var(--surface-inner)] border border-border/50 p-4">
-              <div className="text-xs text-muted-foreground mb-3">Recipient</div>
+              <div className="text-xs text-muted-foreground mb-3">
+                Recipient
+              </div>
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-full bg-accent/80 flex items-center justify-center shrink-0">
                   <User className="w-4 h-4 text-muted-foreground" />
@@ -1942,17 +2015,22 @@ export function PaymentCard() {
               {receiver && directReceiverAddress && recipientPrimaryDomain && (
                 <div className="mt-2 text-xs text-muted-foreground">
                   Primary domain:{" "}
-                  <span className="text-foreground">{recipientPrimaryDomain}</span>
-                </div>
-              )}
-              {receiver && isDomainReceiver && resolvedReceiver && !isResolvingRecipient && (
-                <div className="mt-2 text-xs text-muted-foreground">
-                  Resolves to{" "}
-                  <span className="font-mono text-foreground">
-                    {shortenAddress(resolvedReceiver)}
+                  <span className="text-foreground">
+                    {recipientPrimaryDomain}
                   </span>
                 </div>
               )}
+              {receiver &&
+                isDomainReceiver &&
+                resolvedReceiver &&
+                !isResolvingRecipient && (
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    Resolves to{" "}
+                    <span className="font-mono text-foreground">
+                      {shortenAddress(resolvedReceiver)}
+                    </span>
+                  </div>
+                )}
               {receiver && !isResolvingRecipient && isValidReceiver && (
                 <div className="mt-2 text-xs text-muted-foreground">
                   Public:{" "}
@@ -1963,12 +2041,15 @@ export function PaymentCard() {
                   Shielded: ***
                 </div>
               )}
-              {receiver && !isResolvingRecipient && !isValidReceiver && !isDomainReceiver && (
-                <div className="mt-2 flex items-center gap-1.5 text-xs text-destructive">
-                  <AlertTriangle className="w-3 h-3" />
-                  Invalid Solana address
-                </div>
-              )}
+              {receiver &&
+                !isResolvingRecipient &&
+                !isValidReceiver &&
+                !isDomainReceiver && (
+                  <div className="mt-2 flex items-center gap-1.5 text-xs text-destructive">
+                    <AlertTriangle className="w-3 h-3" />
+                    Invalid Solana address
+                  </div>
+                )}
               <fieldset className="mt-3">
                 <legend className="mb-2 text-xs text-muted-foreground">
                   Send to:
@@ -2015,7 +2096,6 @@ export function PaymentCard() {
             </div>
           </div>
 
-          {/* Private Transfer Toggle */}
           <div className="mx-3 mt-2">
             <PrivateRoutingControls
               id="private-transfer-toggle"
@@ -2035,7 +2115,8 @@ export function PaymentCard() {
               onSplitChange={handleSplitChange}
               showRoutingControls={recipientBalance !== "ephemeral"}
             />
-          </div >
+          </div>
+
           {shouldCheckDestinationEata &&
             (destinationEataStatus === "checking" ||
               destinationEataStatus === "missing" ||
@@ -2074,15 +2155,15 @@ export function PaymentCard() {
                     {destinationEataError}
                   </div>
                 )}
-                {destinationEataStatus === "missing" && destinationEataError && (
-                  <div className="mt-2 text-xs text-destructive">
-                    {destinationEataError}
-                  </div>
-                )}
+                {destinationEataStatus === "missing" &&
+                  destinationEataError && (
+                    <div className="mt-2 text-xs text-destructive">
+                      {destinationEataError}
+                    </div>
+                  )}
               </div>
             )}
 
-          {/* Advanced settings */}
           <div className="mx-3 mt-2">
             <div className="rounded-xl bg-secondary/30">
               <button
@@ -2094,10 +2175,14 @@ export function PaymentCard() {
               >
                 <div className="flex items-center gap-2">
                   <Settings2 className="h-3.5 w-3.5 text-muted-foreground" />
-                  <span className="text-xs font-medium text-foreground">Advanced</span>
+                  <span className="text-xs font-medium text-foreground">
+                    Advanced
+                  </span>
                 </div>
                 <ChevronDown
-                  className={`h-4 w-4 text-muted-foreground transition-transform ${advancedOpen ? "rotate-180" : ""}`}
+                  className={`h-4 w-4 text-muted-foreground transition-transform ${
+                    advancedOpen ? "rotate-180" : ""
+                  }`}
                 />
               </button>
               {advancedOpen && (
@@ -2105,7 +2190,6 @@ export function PaymentCard() {
                   id="advanced-settings-panel"
                   className="border-t border-border/40 px-4 py-3 space-y-4"
                 >
-                  {/* Memo (optional) */}
                   <div className="space-y-2">
                     <label
                       htmlFor="payment-memo"
@@ -2128,7 +2212,6 @@ export function PaymentCard() {
                     />
                   </div>
 
-                  {/* Exact Out */}
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="text-xs font-medium text-foreground">
@@ -2138,8 +2221,8 @@ export function PaymentCard() {
                         {isSendingMaxSourceBalance
                           ? "Exact out is disabled when sending the full source balance."
                           : effectiveExactOut
-                          ? "Recipient gets the entered amount. Fees are charged to sender."
-                          : "Fees may be deducted from the recipient amount."}
+                            ? "Recipient gets the entered amount. Fees are charged to sender."
+                            : "Fees may be deducted from the recipient amount."}
                       </div>
                     </div>
                     <Switch
@@ -2153,7 +2236,6 @@ export function PaymentCard() {
                     />
                   </div>
 
-                  {/* Gasless sponsor */}
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
@@ -2206,134 +2288,127 @@ export function PaymentCard() {
             </div>
           </div>
 
-          {/* Error */}
-          {
-            error && status === "error" && (
-              <div className="mx-3 mt-2 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/20">
-                <div className="flex items-center justify-between gap-3">
-                  {errorTransactionSignature ? (
-                    <a
-                      href={getExplorerTransactionHref(
-                        errorTransactionSignature,
-                        txExplorerRpcEndpoint
-                      )}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="min-w-0 inline-flex items-center gap-1 text-xs text-destructive hover:underline"
-                    >
-                      <span>{getErrorTransactionLabel(error)}:</span>
-                      <span className="font-mono">
-                        {shortenAddress(errorTransactionSignature)}
-                      </span>
-                      <ExternalLink className="h-3 w-3 shrink-0" />
-                    </a>
-                  ) : (
-                    <span className="text-xs text-destructive">{error}</span>
-                  )}
-                  {errorTxSignature && !errorTransactionSignature && (
-                    <a
-                      href={getExplorerTransactionHref(
-                        errorTxSignature,
-                        txExplorerRpcEndpoint
-                      )}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="shrink-0 flex items-center gap-1 text-xs text-destructive hover:underline"
-                    >
-                      View tx
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                  )}
-                </div>
-                {validatorMismatchFix && (
-                  <div className="mt-2 flex flex-col gap-2 border-t border-destructive/15 pt-2 sm:flex-row sm:items-center sm:justify-between">
-                    <span className="text-xs text-destructive/90">
-                      Undelegate from the current validator, then retry.
+          {error && status === "error" && (
+            <div className="mx-3 mt-2 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/20">
+              <div className="flex items-center justify-between gap-3">
+                {errorTransactionSignature ? (
+                  <a
+                    href={getExplorerTransactionHref(
+                      errorTransactionSignature,
+                      txExplorerRpcEndpoint
+                    )}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="min-w-0 inline-flex items-center gap-1 text-xs text-destructive hover:underline"
+                  >
+                    <span>{getErrorTransactionLabel(error)}:</span>
+                    <span className="font-mono">
+                      {shortenAddress(errorTransactionSignature)}
                     </span>
+                    <ExternalLink className="h-3 w-3 shrink-0" />
+                  </a>
+                ) : (
+                  <span className="text-xs text-destructive">{error}</span>
+                )}
+                {errorTxSignature && !errorTransactionSignature && (
+                  <a
+                    href={getExplorerTransactionHref(
+                      errorTxSignature,
+                      txExplorerRpcEndpoint
+                    )}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="shrink-0 flex items-center gap-1 text-xs text-destructive hover:underline"
+                  >
+                    View tx
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
+              </div>
+              {validatorMismatchFix && (
+                <div className="mt-2 flex flex-col gap-2 border-t border-destructive/15 pt-2 sm:flex-row sm:items-center sm:justify-between">
+                  <span className="text-xs text-destructive/90">
+                    Undelegate from the current validator, then retry.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleUndelegateEata}
+                    disabled={isUndelegatingEata}
+                    className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-md border border-destructive/30 bg-background px-3 text-xs font-semibold text-destructive transition-colors hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/40 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    {isUndelegatingEata ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <ShieldCheck className="h-3.5 w-3.5" />
+                    )}
+                    {isUndelegatingEata ? "Fixing..." : "Fix delegation"}
+                  </button>
+                </div>
+              )}
+              {undelegateEataError && (
+                <div className="mt-2 text-xs text-destructive">
+                  {undelegateEataError}
+                </div>
+              )}
+            </div>
+          )}
+
+          {isMintInitialized === false && (
+            <div className="mx-3 mt-2 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3">
+              <div className="min-w-0">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-foreground">
+                        Shielded payments are not enabled for this mint yet.
+                      </div>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        Pay the fees (~0.2 SOL) and set it up permissionlessly.
+                      </p>
+                    </div>
                     <button
                       type="button"
-                      onClick={handleUndelegateEata}
-                      disabled={isUndelegatingEata}
-                      className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-md border border-destructive/30 bg-background px-3 text-xs font-semibold text-destructive transition-colors hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/40 disabled:cursor-not-allowed disabled:opacity-70"
+                      onClick={connected ? handleSetupMint : openConnectModal}
+                      disabled={isSettingUpMint}
+                      className="mt-0.5 inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {isUndelegatingEata ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <ShieldCheck className="h-3.5 w-3.5" />
+                      {isSettingUpMint && (
+                        <Loader2 className="h-4 w-4 animate-spin" />
                       )}
-                      {isUndelegatingEata ? "Fixing..." : "Fix delegation"}
+                      {connected ? "Set Up" : "Connect Wallet to Set Up"}
                     </button>
                   </div>
-                )}
-                {undelegateEataError && (
-                  <div className="mt-2 text-xs text-destructive">
-                    {undelegateEataError}
-                  </div>
-                )}
-              </div>
-            )
-          }
-
-          {
-            isMintInitialized === false && (
-              <div className="mx-3 mt-2 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3">
-                <div className="min-w-0">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium text-foreground">
-                          Shielded payments are not enabled for this mint yet.
-                        </div>
-                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                          Pay the fees (~0.2 SOL) and set it up permissionlessly.
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={connected ? handleSetupMint : openConnectModal}
-                        disabled={isSettingUpMint}
-                        className="mt-0.5 inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {isSettingUpMint && <Loader2 className="h-4 w-4 animate-spin" />}
-                        {connected ? "Set Up" : "Connect Wallet to Set Up"}
-                      </button>
+                  {mintSetupError && (
+                    <div className="mt-2 text-xs text-destructive">
+                      {mintSetupError}
                     </div>
-                    {mintSetupError && (
-                      <div className="mt-2 text-xs text-destructive">
-                        {mintSetupError}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )
-          }
-
-          {/* Success */}
-          {
-            status === "confirmed" && txSignature && (
-              <div className="mx-3 mt-2 flex items-center justify-between px-3 py-2 rounded-lg bg-success/10 border border-success/20">
-                <div className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-success" />
-                  <span className="text-xs text-success">Payment sent!</span>
-                </div>
-                <a
-                  href={getExplorerTransactionHref(
-                    txSignature,
-                    txExplorerRpcEndpoint
                   )}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1 text-xs text-success hover:underline"
-                >
-                  View tx
-                  <ExternalLink className="w-3 h-3" />
-                </a>
+                </div>
               </div>
-            )
-          }
+            </div>
+          )}
 
-          {/* Action Button */}
+          {status === "confirmed" && txSignature && (
+            <div className="mx-3 mt-2 flex items-center justify-between px-3 py-2 rounded-lg bg-success/10 border border-success/20">
+              <div className="flex items-center gap-2">
+                <Check className="w-4 h-4 text-success" />
+                <span className="text-xs text-success">Payment sent!</span>
+              </div>
+              <a
+                href={getExplorerTransactionHref(
+                  txSignature,
+                  txExplorerRpcEndpoint
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-xs text-success hover:underline"
+              >
+                View tx
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
+          )}
+
           <div className="p-3 pt-3">
             <PaymentActionButton
               connected={connected}
@@ -2358,8 +2433,8 @@ export function PaymentCard() {
               onReset={handleReset}
             />
           </div>
-        </div >
-      </div >
+        </div>
+      </div>
 
       <TokenSelectModal
         open={modalOpen}
@@ -2371,7 +2446,6 @@ export function PaymentCard() {
   );
 }
 
-/* ---------- Payment Action Button ---------- */
 function PaymentActionButton({
   connected,
   status,
@@ -2526,6 +2600,7 @@ function PaymentActionButton({
         : status === "signing"
           ? "Waiting for wallet..."
           : "Sending payment...";
+
     return (
       <button
         disabled
