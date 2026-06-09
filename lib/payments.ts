@@ -23,7 +23,15 @@ function normalizePaymentsCluster(value: string) {
     return "";
   }
 
-  if (normalizedValue === "devnet" || normalizedValue === "testnet") {
+  if (
+    normalizedValue === "devnet" ||
+    normalizedValue === "devnet-private" ||
+    normalizedValue === "testnet"
+  ) {
+    return normalizedValue;
+  }
+
+  if (normalizedValue === "mainnet-private") {
     return normalizedValue;
   }
 
@@ -80,6 +88,11 @@ export function getPaymentsExplorerTransactionUrl(
     `/tx/${encodeURIComponent(signature)}`,
     "https://explorer.solana.com",
   );
+
+  if (PAYMENTS_CLUSTER === "devnet-private") {
+    explorerUrl.searchParams.set("cluster", "devnet");
+    return explorerUrl.toString();
+  }
 
   if (customRpcEndpoint) {
     try {

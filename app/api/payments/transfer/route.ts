@@ -12,6 +12,7 @@ interface PaymentTransferBuildRequest {
   to?: string;
   mint?: string;
   amount?: string;
+  validator?: string;
   visibility?: "public" | "private";
   fromBalance?: "base" | "ephemeral";
   toBalance?: "base" | "ephemeral";
@@ -34,6 +35,7 @@ export async function POST(request: NextRequest) {
       to,
       mint,
       amount,
+      validator,
       visibility,
       fromBalance,
       toBalance,
@@ -51,6 +53,7 @@ export async function POST(request: NextRequest) {
       typeof to !== "string" ||
       typeof mint !== "string" ||
       typeof amount !== "string" ||
+      (validator !== undefined && typeof validator !== "string") ||
       (authToken !== undefined && typeof authToken !== "string") ||
       (gasless !== undefined && typeof gasless !== "boolean") ||
       (memo !== undefined && typeof memo !== "string") ||
@@ -79,16 +82,19 @@ export async function POST(request: NextRequest) {
       new PublicKey(from);
       new PublicKey(to);
       new PublicKey(mint);
+      if (validator) {
+        new PublicKey(validator);
+      }
     } catch {
       return NextResponse.json(
-        { error: "Invalid from, to, or mint public key" },
+        { error: "Invalid from, to, mint, or validator public key" },
         { status: 400 }
       );
     }
 
-    if (!/^[1-9]\d*$/.test(amount)) {
+    if (!/^\d+$/.test(amount)) {
       return NextResponse.json(
-        { error: "amount must be a positive integer string" },
+        { error: "amount must be a non-negative integer string" },
         { status: 400 }
       );
     }
@@ -155,6 +161,7 @@ export async function POST(request: NextRequest) {
         ...(PAYMENTS_CLUSTER ? { cluster: PAYMENTS_CLUSTER } : {}),
         mint,
         amount: Number(amountBigInt),
+        ...(validator ? { validator } : {}),
         visibility,
         fromBalance: resolvedFromBalance,
         toBalance: resolvedToBalance,
