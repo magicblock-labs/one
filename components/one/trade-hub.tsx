@@ -269,7 +269,7 @@ export function TradeHub({
                 <span className="inline-flex cursor-not-allowed">{button}</span>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="max-w-[220px]">
-                Swaps are only supported on mainnet
+                An improved version of swaps will be released soon
               </TooltipContent>
             </Tooltip>
           );

@@ -2,7 +2,6 @@ import { Header } from "@/components/one/header";
 import { TradeHub } from "@/components/one/trade-hub";
 // import { TokenPrices } from "@/components/one/token-prices";
 import { NetWorthPanel } from "@/components/one/net-worth-panel";
-import { PAYMENTS_CLUSTER } from "@/lib/payments";
 
 type HomeProps = {
   searchParams: Promise<{
@@ -70,7 +69,7 @@ export default async function Home({ searchParams }: HomeProps) {
             initialBuyMint={initialBuyMint}
             initialSellMint={initialSellMint}
             initialSwapAmount={initialSwapAmount}
-            isSwapDisabled={PAYMENTS_CLUSTER === "devnet"}
+            isSwapDisabled
           />
 
           {/* Token Prices */}
