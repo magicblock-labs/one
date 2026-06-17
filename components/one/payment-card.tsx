@@ -667,6 +667,8 @@ export function PaymentCard() {
     recipientBalance === "ephemeral" &&
     Boolean(resolvedReceiver) &&
     !isResolvingRecipient;
+  const isGaslessDisabledForSource = sourceBalance === "ephemeral";
+  const effectiveGasless = isGasless && !isGaslessDisabledForSource;
 
   const isDestinationEataChecking =
     shouldCheckDestinationEata && destinationEataStatus === "checking";
@@ -836,6 +838,11 @@ export function PaymentCard() {
   }, [connection, connected, publicKey]);
 
   useEffect(() => {
+    if (isGaslessDisabledForSource) {
+      gaslessAutoOptOutRef.current = false;
+      return;
+    }
+
     if (walletSolLamports === null || walletSolLamports > 0) {
       gaslessAutoOptOutRef.current = false;
       return;
@@ -845,7 +852,14 @@ export function PaymentCard() {
       setIsGasless(true);
       setAdvancedOpen(true);
     }
-  }, [walletSolLamports, isGasless]);
+  }, [walletSolLamports, isGasless, isGaslessDisabledForSource]);
+
+  useEffect(() => {
+    if (!isGaslessDisabledForSource || !isGasless) return;
+
+    gaslessAutoOptOutRef.current = false;
+    setIsGasless(false);
+  }, [isGasless, isGaslessDisabledForSource]);
 
   useEffect(() => {
     gaslessAutoOptOutRef.current = false;
@@ -1115,7 +1129,7 @@ export function PaymentCard() {
     const nextMinDelayMs = shouldPersistRoutingParams ? String(minDelayMs) : "";
     const nextMaxDelayMs = shouldPersistRoutingParams ? String(maxDelayMs) : "";
     const nextSplit = shouldPersistRoutingParams ? String(split) : "";
-    const nextGasless = isGasless ? "1" : "";
+    const nextGasless = effectiveGasless ? "1" : "";
     const nextFromBalance =
       sourceBalance === "ephemeral" ? "ephemeral" : "";
     const nextToBalance =
@@ -1191,7 +1205,7 @@ export function PaymentCard() {
       params.delete("split");
     }
 
-    if (isGasless) {
+    if (effectiveGasless) {
       params.set("gasless", "1");
     } else {
       params.delete("gasless");
@@ -1208,7 +1222,7 @@ export function PaymentCard() {
     sourceBalance,
     recipientBalance,
     isPrivate,
-    isGasless,
+    effectiveGasless,
     minDelayMs,
     maxDelayMs,
     split,
@@ -1245,11 +1259,17 @@ export function PaymentCard() {
 
   const handleGaslessChange = useCallback(
     (checked: boolean) => {
+      if (isGaslessDisabledForSource) {
+        gaslessAutoOptOutRef.current = false;
+        setIsGasless(false);
+        return;
+      }
+
       resetResultState();
       gaslessAutoOptOutRef.current = walletSolLamports === 0 && !checked;
       setIsGasless(checked);
     },
-    [resetResultState, walletSolLamports]
+    [isGaslessDisabledForSource, resetResultState, walletSolLamports]
   );
 
   const ensurePrivateRoutingDefaults = useCallback(() => {
@@ -1286,6 +1306,8 @@ export function PaymentCard() {
       resetResultState();
       setSourceBalance(nextBalance);
       if (nextBalance === "ephemeral") {
+        gaslessAutoOptOutRef.current = false;
+        setIsGasless(false);
         setIsPrivate(true);
       }
     },
@@ -1713,7 +1735,7 @@ export function PaymentCard() {
           ...(sourceBalance === "ephemeral" && privateAuthToken
             ? { authToken: privateAuthToken }
             : {}),
-          ...(isGasless ? { gasless: true } : {}),
+          ...(effectiveGasless ? { gasless: true } : {}),
           ...(memo ? { memo } : {}),
           exactOut: effectiveExactOut,
           ...(isPrivate
@@ -1775,7 +1797,7 @@ export function PaymentCard() {
     sourceBalance,
     privateAuthToken,
     recipientBalance,
-    isGasless,
+    effectiveGasless,
     memo,
     effectiveExactOut,
     minDelayMs,
@@ -2270,7 +2292,9 @@ export function PaymentCard() {
                         </Popover>
                       </div>
                       <div className="text-[11px] text-muted-foreground">
-                        {walletSolLamports === 0 && isGasless
+                        {isGaslessDisabledForSource
+                          ? "Gasless sponsor is disabled when paying from shielded balance."
+                          : walletSolLamports === 0 && effectiveGasless
                           ? "Enabled automatically because your wallet has no SOL."
                           : walletSolLamports === 0
                             ? "Your wallet has no SOL. Turn this on if you want a sponsor to cover the network fees."
@@ -2278,7 +2302,8 @@ export function PaymentCard() {
                       </div>
                     </div>
                     <Switch
-                      checked={isGasless}
+                      checked={effectiveGasless}
+                      disabled={isGaslessDisabledForSource}
                       onCheckedChange={handleGaslessChange}
                       aria-label="Enable gasless transfer"
                     />
