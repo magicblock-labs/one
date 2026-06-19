@@ -341,24 +341,6 @@ function getExplorerTransactionHref(
   return `/api/explorer/tx?${params.toString()}`;
 }
 
-function getAuthenticatedConfirmationWsEndpoint(
-  rpcEndpoint: string,
-  authToken: string
-) {
-  const wsEndpoint = new URL(rpcEndpoint);
-
-  if (wsEndpoint.protocol === "https:") {
-    wsEndpoint.protocol = "wss:";
-  } else if (wsEndpoint.protocol === "http:") {
-    wsEndpoint.protocol = "ws:";
-  } else if (wsEndpoint.protocol !== "wss:" && wsEndpoint.protocol !== "ws:") {
-    throw new Error("Unsupported confirmation RPC endpoint protocol");
-  }
-
-  wsEndpoint.searchParams.set("token", authToken);
-  return wsEndpoint.toString();
-}
-
 function formatTokenBalance(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "0";
 
@@ -451,6 +433,63 @@ const TOKEN_PROGRAM_IDS = [
 
 const DEFAULT_MIN_DELAY_MS = 3_000;
 const DEFAULT_MAX_DELAY_MS = 30_000;
+const PAYMENT_CONFIRMATION_POLL_INTERVAL_MS = 1_000;
+const PAYMENT_CONFIRMATION_TIMEOUT_MS = 120_000;
+
+function wait(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function confirmPaymentTransactionByPolling({
+  connection,
+  signature,
+  lastValidBlockHeight,
+}: {
+  connection: Connection;
+  signature: string;
+  lastValidBlockHeight: number;
+}) {
+  const startedAt = Date.now();
+
+  while (true) {
+    const [statusResult, currentBlockHeight] = await Promise.all([
+      connection.getSignatureStatuses([signature], {
+        searchTransactionHistory: true,
+      }),
+      connection.getBlockHeight("confirmed").catch(() => null),
+    ]);
+    const status = statusResult.value[0];
+
+    if (status?.err) {
+      throw new Error(`Transaction failed on-chain: ${signature}`);
+    }
+
+    if (
+      status?.confirmationStatus === "confirmed" ||
+      status?.confirmationStatus === "finalized" ||
+      status?.confirmations === null
+    ) {
+      return;
+    }
+
+    if (
+      currentBlockHeight !== null &&
+      currentBlockHeight > lastValidBlockHeight
+    ) {
+      throw new Error(`Transaction expired before confirmation: ${signature}`);
+    }
+
+    if (Date.now() - startedAt > PAYMENT_CONFIRMATION_TIMEOUT_MS) {
+      throw new Error(
+        `Timed out waiting for transaction confirmation: ${signature}`
+      );
+    }
+
+    await wait(PAYMENT_CONFIRMATION_POLL_INTERVAL_MS);
+  }
+}
 
 export function PaymentCard() {
   const pathname = usePathname();
@@ -1369,7 +1408,8 @@ export function PaymentCard() {
 
       const shouldSubmitViaPaymentsApi =
         options?.submitViaPaymentsApi ||
-        unsignedTransaction.sendTo === "ephemeral";
+        unsignedTransaction.sendTo === "ephemeral" ||
+        Boolean(unsignedTransaction.sendRpcEndpoint);
       const transaction =
         deserializeUnsignedPaymentTransaction(unsignedTransaction);
 
@@ -1441,17 +1481,15 @@ export function PaymentCard() {
           throw new Error("Transaction confirmation requires authentication");
         }
 
-        const shouldAuthenticateConfirmation = Boolean(confirmationAuthToken);
+        const shouldAuthenticateConfirmation =
+          sendJson.confirmationRequiresAuthToken &&
+          Boolean(confirmationAuthToken);
         const confirmationConnection = new Connection(
           sendJson.confirmationRpcEndpoint,
           {
             commitment: "confirmed",
             ...(shouldAuthenticateConfirmation
               ? {
-                  wsEndpoint: getAuthenticatedConfirmationWsEndpoint(
-                    sendJson.confirmationRpcEndpoint,
-                    confirmationAuthToken
-                  ),
                   httpHeaders: {
                     Authorization: `Bearer ${confirmationAuthToken}`,
                   },
@@ -1460,18 +1498,11 @@ export function PaymentCard() {
           }
         );
 
-        const confirmation = await confirmationConnection.confirmTransaction(
-          {
-            signature: sendJson.signature,
-            blockhash: unsignedTransaction.recentBlockhash,
-            lastValidBlockHeight: unsignedTransaction.lastValidBlockHeight,
-          },
-          "confirmed"
-        );
-
-        if (confirmation.value.err) {
-          throw new Error(`Transaction failed on-chain: ${sendJson.signature}`);
-        }
+        await confirmPaymentTransactionByPolling({
+          connection: confirmationConnection,
+          signature: sendJson.signature,
+          lastValidBlockHeight: unsignedTransaction.lastValidBlockHeight,
+        });
 
         return sendJson.signature;
       }
@@ -1754,7 +1785,8 @@ export function PaymentCard() {
         () => setStatus("sending"),
         {
           authToken: privateAuthToken,
-          submitViaPaymentsApi: !isStealthReceiver && sourceBalance === "ephemeral",
+          submitViaPaymentsApi:
+            !isStealthReceiver && (isPrivate || sourceBalance === "ephemeral"),
         }
       );
 
