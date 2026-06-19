@@ -4,15 +4,17 @@ import { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeftRight,
+  AtSign,
+  QrCode,
   Send,
   Shield as ShieldIcon,
-  QrCode,
 } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { SwapCard } from "./swap-card";
 import { PaymentCard } from "./payment-card";
 import { ShieldCard } from "./shield-card";
 import { RequestCard } from "./request-card";
+import { HandleCard } from "./handle-card";
 import {
   Tooltip,
   TooltipContent,
@@ -24,6 +26,7 @@ const topTabs = [
   { id: "swap", label: "Swap", icon: ArrowLeftRight },
   { id: "shield", label: "Shield", icon: ShieldIcon },
   { id: "request", label: "Request", icon: QrCode },
+  { id: "handle", label: "Handle", icon: AtSign },
 ] as const;
 
 const SWAP_QUERY_PARAMS = [
@@ -49,6 +52,7 @@ const PAYMENT_QUERY_PARAMS = [
 ] as const;
 const REQUEST_QUERY_PARAMS = ["prd", "ramt", "rmint"] as const;
 const SHIELD_QUERY_PARAMS = ["shamt", "shmint"] as const;
+const HANDLE_QUERY_PARAMS = ["h"] as const;
 
 type TopTab = (typeof topTabs)[number]["id"];
 
@@ -57,7 +61,8 @@ function isTopTab(value: string | null): value is TopTab {
     value === "payment" ||
     value === "swap" ||
     value === "shield" ||
-    value === "request"
+    value === "request" ||
+    value === "handle"
   );
 }
 
@@ -110,6 +115,7 @@ export function TradeHub({
   const hasShieldSelection = Boolean(
     searchParams.get("shamt") || searchParams.get("shmint")
   );
+  const hasHandleSelection = Boolean(searchParams.get("h"));
   const [activeTop, setActiveTop] = useState<TopTab>(
     selectableUrlTab
       ? selectableUrlTab
@@ -119,9 +125,11 @@ export function TradeHub({
           ? "request"
           : hasShieldSelection
             ? "shield"
-            : hasSwapSelection && !isSwapDisabled
-              ? "swap"
-              : "payment"
+            : hasHandleSelection
+              ? "handle"
+              : hasSwapSelection && !isSwapDisabled
+                ? "swap"
+                : "payment"
   );
   const showPrivatePaymentsNotice =
     activeTop === "payment" && !searchParams.has("public");
@@ -147,6 +155,11 @@ export function TradeHub({
       return;
     }
 
+    if (hasHandleSelection) {
+      setActiveTop("handle");
+      return;
+    }
+
     if (hasSwapSelection && !isSwapDisabled) {
       setActiveTop("swap");
       return;
@@ -158,6 +171,7 @@ export function TradeHub({
     hasPaymentSelection,
     hasRequestSelection,
     hasShieldSelection,
+    hasHandleSelection,
     hasSwapSelection,
     isSwapDisabled,
   ]);
@@ -171,24 +185,35 @@ export function TradeHub({
               ...PAYMENT_QUERY_PARAMS,
               ...REQUEST_QUERY_PARAMS,
               ...SHIELD_QUERY_PARAMS,
+              ...HANDLE_QUERY_PARAMS,
             ]
           : tab === "payment"
             ? [
                 ...SWAP_QUERY_PARAMS,
                 ...REQUEST_QUERY_PARAMS,
                 ...SHIELD_QUERY_PARAMS,
+                ...HANDLE_QUERY_PARAMS,
               ]
             : tab === "shield"
               ? [
                   ...SWAP_QUERY_PARAMS,
                   ...PAYMENT_QUERY_PARAMS,
                   ...REQUEST_QUERY_PARAMS,
+                  ...HANDLE_QUERY_PARAMS,
                 ]
-              : [
-                  ...SWAP_QUERY_PARAMS,
-                  ...PAYMENT_QUERY_PARAMS,
-                  ...SHIELD_QUERY_PARAMS,
-                ];
+              : tab === "handle"
+                ? [
+                    ...SWAP_QUERY_PARAMS,
+                    ...PAYMENT_QUERY_PARAMS,
+                    ...REQUEST_QUERY_PARAMS,
+                    ...SHIELD_QUERY_PARAMS,
+                  ]
+                : [
+                    ...SWAP_QUERY_PARAMS,
+                    ...PAYMENT_QUERY_PARAMS,
+                    ...SHIELD_QUERY_PARAMS,
+                    ...HANDLE_QUERY_PARAMS,
+                  ];
 
       paramsToRemove.forEach((key) => params.delete(key));
       if (tab === "payment") {
@@ -287,6 +312,7 @@ export function TradeHub({
       {activeTop === "payment" && <PaymentCard />}
       {activeTop === "shield" && <ShieldCard />}
       {activeTop === "request" && <RequestCard />}
+      {activeTop === "handle" && <HandleCard />}
 
       {showPrivatePaymentsNotice && (
         <div className="mt-4 w-full xl:hidden">

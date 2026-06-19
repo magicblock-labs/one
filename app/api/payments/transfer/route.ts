@@ -6,6 +6,10 @@ import {
   getPaymentsApiUrl,
   getPaymentsTimeoutSignal,
 } from "@/lib/payments";
+import {
+  getExactStealthHandleInput,
+  isStealthHandleInput,
+} from "@/lib/stealth-handles";
 
 interface PaymentTransferBuildRequest {
   from?: string;
@@ -32,7 +36,6 @@ export async function POST(request: NextRequest) {
     const body = (await request.json()) as PaymentTransferBuildRequest;
     const {
       from,
-      to,
       mint,
       amount,
       validator,
@@ -47,10 +50,12 @@ export async function POST(request: NextRequest) {
       maxDelayMs,
       split,
     } = body;
+    const to = typeof body.to === "string" ? getExactStealthHandleInput(body.to) : "";
+    const isStealthRecipient = isStealthHandleInput(to);
 
     if (
       typeof from !== "string" ||
-      typeof to !== "string" ||
+      !to ||
       typeof mint !== "string" ||
       typeof amount !== "string" ||
       (validator !== undefined && typeof validator !== "string") ||
@@ -70,7 +75,10 @@ export async function POST(request: NextRequest) {
       (toBalance !== undefined &&
         toBalance !== "base" &&
         toBalance !== "ephemeral") ||
-      (visibility !== "public" && visibility !== "private")
+      (visibility !== undefined &&
+        visibility !== "public" &&
+        visibility !== "private") ||
+      (!isStealthRecipient && visibility === undefined)
     ) {
       return NextResponse.json(
         { error: "Missing or invalid transfer parameters" },
@@ -80,7 +88,9 @@ export async function POST(request: NextRequest) {
 
     try {
       new PublicKey(from);
-      new PublicKey(to);
+      if (!isStealthRecipient) {
+        new PublicKey(to);
+      }
       new PublicKey(mint);
       if (validator) {
         new PublicKey(validator);
@@ -128,10 +138,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const resolvedVisibility = visibility ?? "private";
     const resolvedFromBalance = fromBalance ?? "base";
     const resolvedToBalance = toBalance ?? "base";
 
-    if (resolvedToBalance === "ephemeral" && visibility !== "private") {
+    if (
+      isStealthRecipient &&
+      (resolvedVisibility !== "private" ||
+        resolvedFromBalance !== "base" ||
+        resolvedToBalance !== "base")
+    ) {
+      return NextResponse.json(
+        { error: "Stealth handle transfers require private base-to-base routing" },
+        { status: 400 }
+      );
+    }
+
+    if (resolvedToBalance === "ephemeral" && resolvedVisibility !== "private") {
       return NextResponse.json(
         { error: "Shielded balance delivery requires shielded routing" },
         { status: 400 }
@@ -162,7 +185,7 @@ export async function POST(request: NextRequest) {
         mint,
         amount: Number(amountBigInt),
         ...(validator ? { validator } : {}),
-        visibility,
+        visibility: resolvedVisibility,
         fromBalance: resolvedFromBalance,
         toBalance: resolvedToBalance,
         initIfMissing: true,
@@ -171,13 +194,13 @@ export async function POST(request: NextRequest) {
         ...(gasless === true ? { gasless: true } : {}),
         ...(memo ? { memo } : {}),
         ...(exactOut !== undefined ? { exactOut } : {}),
-        ...(visibility === "private" && minDelayMs !== undefined
+        ...(resolvedVisibility === "private" && minDelayMs !== undefined
           ? { minDelayMs }
           : {}),
-        ...(visibility === "private" && maxDelayMs !== undefined
+        ...(resolvedVisibility === "private" && maxDelayMs !== undefined
           ? { maxDelayMs }
           : {}),
-        ...(visibility === "private" && split !== undefined ? { split } : {}),
+        ...(resolvedVisibility === "private" && split !== undefined ? { split } : {}),
       }),
       signal: getPaymentsTimeoutSignal(),
       cache: "no-store",

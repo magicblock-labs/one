@@ -31,6 +31,7 @@ Private payments use the following environment variables:
 - `PAYMENTS_API_BASE_URL`: base URL for the payments API.
 - `CLUSTER`: cluster name passed to the payments API and used for Solana Explorer links. Supported values are `devnet`, `testnet`, and `mainnet-beta`.
 - `PAYMENTS_CLUSTER`: legacy fallback for the payments API cluster. `CLUSTER` takes precedence if both are set. If this value is an RPC URL containing `devnet`, `testnet`, or `mainnet`, the app infers the corresponding cluster name.
+- `PAYMENTS_EPHEMERAL_RPC_URL` or `EPHEMERAL_RPC_URL`: ephemeral RPC used when signed transactions must be submitted to ER.
 - `NEXT_PUBLIC_PAYMENTS_TEST_USDC_MINT`: overrides the default payment mint in the UI.
 
 Example:
@@ -39,12 +40,15 @@ Example:
 PAYMENTS_API_BASE_URL=http://localhost:8787 \
 CLUSTER=devnet \
 SOLANA_RPC_URL=https://rpc.magicblock.app/devnet \
+PAYMENTS_EPHEMERAL_RPC_URL=https://devnet.magicblock.app \
 NEXT_PUBLIC_SOLANA_RPC_URL=https://rpc.magicblock.app/devnet \
 NEXT_PUBLIC_PAYMENTS_TEST_USDC_MINT=4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU \
 yarn dev -p 3002
 ```
 
 With `CLUSTER=devnet`, the app sends `cluster=devnet` to the payments API and opens transactions on `https://explorer.solana.com` with the `devnet` cluster selected.
+
+The Handle tab creates or updates `.block` stealth pools. Payment recipients can now be a wallet address, a `.sol` name, or a `.block` handle; `.block` recipients are sent through the normal transfer route with private routing.
 
 ## Learn More
 

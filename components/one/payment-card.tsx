@@ -37,6 +37,12 @@ import {
 } from "@/lib/private-balance-refresh";
 import { PAYMENTS_DEFAULT_USDC_MINT } from "@/lib/payments";
 import {
+  PaymentTransactionSubmissionError,
+  type UnsignedPaymentTransaction,
+  deserializeUnsignedPaymentTransaction,
+  ensurePaymentTransferQueueCrank,
+} from "@/lib/payment-transactions";
+import {
   clearStoredPrivateAuthToken,
   fetchPrivateBalance,
   fetchSplChallenge,
@@ -51,6 +57,10 @@ import {
   clampPrivateSplit,
   formatPrivateRoutingSummary,
 } from "@/lib/private-routing";
+import {
+  getExactStealthHandleInput,
+  isStealthHandleInput,
+} from "@/lib/stealth-handles";
 import { PrivateRoutingControls } from "./private-routing-controls";
 import {
   Popover,
@@ -129,17 +139,6 @@ function deriveEphemeralAtaAddress(owner: PublicKey, mint: PublicKey) {
   )[0];
 }
 
-function base64ToUint8Array(base64: string) {
-  const binary = globalThis.atob(base64);
-  const bytes = new Uint8Array(binary.length);
-
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-
-  return bytes;
-}
-
 function uint8ArrayToBase64(bytes: Uint8Array) {
   let binary = "";
 
@@ -148,41 +147,6 @@ function uint8ArrayToBase64(bytes: Uint8Array) {
   });
 
   return globalThis.btoa(binary);
-}
-
-function deserializeUnsignedPaymentTransaction(
-  unsignedTransaction: UnsignedPaymentTransaction
-) {
-  const transactionBytes = base64ToUint8Array(
-    unsignedTransaction.transactionBase64
-  );
-
-  if (
-    unsignedTransaction.version === undefined ||
-    unsignedTransaction.version === null
-  ) {
-    try {
-      return Transaction.from(transactionBytes);
-    } catch {
-      return VersionedTransaction.deserialize(transactionBytes);
-    }
-  }
-
-  if (unsignedTransaction.version === "legacy") {
-    return Transaction.from(transactionBytes);
-  }
-
-  if (
-    unsignedTransaction.version === "v0" ||
-    unsignedTransaction.version === 0 ||
-    unsignedTransaction.version === "0"
-  ) {
-    return VersionedTransaction.deserialize(transactionBytes);
-  }
-
-  throw new Error(
-    `Unsupported transaction version: ${unsignedTransaction.version}`
-  );
 }
 
 function preparePaymentTransactionForSigning(
@@ -377,24 +341,6 @@ function getExplorerTransactionHref(
   return `/api/explorer/tx?${params.toString()}`;
 }
 
-function getAuthenticatedConfirmationWsEndpoint(
-  rpcEndpoint: string,
-  authToken: string
-) {
-  const wsEndpoint = new URL(rpcEndpoint);
-
-  if (wsEndpoint.protocol === "https:") {
-    wsEndpoint.protocol = "wss:";
-  } else if (wsEndpoint.protocol === "http:") {
-    wsEndpoint.protocol = "ws:";
-  } else if (wsEndpoint.protocol !== "wss:" && wsEndpoint.protocol !== "ws:") {
-    throw new Error("Unsupported confirmation RPC endpoint protocol");
-  }
-
-  wsEndpoint.searchParams.set("token", authToken);
-  return wsEndpoint.toString();
-}
-
 function formatTokenBalance(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "0";
 
@@ -487,6 +433,63 @@ const TOKEN_PROGRAM_IDS = [
 
 const DEFAULT_MIN_DELAY_MS = 3_000;
 const DEFAULT_MAX_DELAY_MS = 30_000;
+const PAYMENT_CONFIRMATION_POLL_INTERVAL_MS = 1_000;
+const PAYMENT_CONFIRMATION_TIMEOUT_MS = 120_000;
+
+function wait(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function confirmPaymentTransactionByPolling({
+  connection,
+  signature,
+  lastValidBlockHeight,
+}: {
+  connection: Connection;
+  signature: string;
+  lastValidBlockHeight: number;
+}) {
+  const startedAt = Date.now();
+
+  while (true) {
+    const [statusResult, currentBlockHeight] = await Promise.all([
+      connection.getSignatureStatuses([signature], {
+        searchTransactionHistory: true,
+      }),
+      connection.getBlockHeight("confirmed").catch(() => null),
+    ]);
+    const status = statusResult.value[0];
+
+    if (status?.err) {
+      throw new Error(`Transaction failed on-chain: ${signature}`);
+    }
+
+    if (
+      status?.confirmationStatus === "confirmed" ||
+      status?.confirmationStatus === "finalized" ||
+      status?.confirmations === null
+    ) {
+      return;
+    }
+
+    if (
+      currentBlockHeight !== null &&
+      currentBlockHeight > lastValidBlockHeight
+    ) {
+      throw new Error(`Transaction expired before confirmation: ${signature}`);
+    }
+
+    if (Date.now() - startedAt > PAYMENT_CONFIRMATION_TIMEOUT_MS) {
+      throw new Error(
+        `Timed out waiting for transaction confirmation: ${signature}`
+      );
+    }
+
+    await wait(PAYMENT_CONFIRMATION_POLL_INTERVAL_MS);
+  }
+}
 
 export function PaymentCard() {
   const pathname = usePathname();
@@ -644,19 +647,23 @@ export function PaymentCard() {
     [amount, selectedToken.decimals]
   );
 
-  const trimmedReceiver = receiver.trim();
+  const trimmedReceiver = getExactStealthHandleInput(receiver);
+  const isStealthReceiver = isStealthHandleInput(trimmedReceiver);
   const directReceiverAddress = useMemo(
     () => getRecipientAddress(trimmedReceiver),
     [trimmedReceiver]
   );
   const isDomainReceiver = Boolean(
-    trimmedReceiver && !directReceiverAddress && looksLikeDomain(trimmedReceiver)
+    trimmedReceiver &&
+    !directReceiverAddress &&
+    !isStealthReceiver &&
+    looksLikeDomain(trimmedReceiver)
   );
   const resolvedReceiver = directReceiverAddress ?? resolvedDomainAddress;
 
   const isValidReceiver = useMemo(() => {
-    return Boolean(resolvedReceiver);
-  }, [resolvedReceiver]);
+    return isStealthReceiver || Boolean(resolvedReceiver);
+  }, [isStealthReceiver, resolvedReceiver]);
 
   const routingSummary = useMemo(() => {
     return formatPrivateRoutingSummary(split, minDelayMs, maxDelayMs);
@@ -741,6 +748,11 @@ export function PaymentCard() {
       currentMint === nextMint ? currentMint : nextMint
     );
   }, [searchMint, tokens]);
+
+  useEffect(() => {
+    if (!isStealthReceiver || isPrivate) return;
+    setIsPrivate(true);
+  }, [isStealthReceiver, isPrivate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1396,7 +1408,8 @@ export function PaymentCard() {
 
       const shouldSubmitViaPaymentsApi =
         options?.submitViaPaymentsApi ||
-        unsignedTransaction.sendTo === "ephemeral";
+        unsignedTransaction.sendTo === "ephemeral" ||
+        Boolean(unsignedTransaction.sendRpcEndpoint);
       const transaction =
         deserializeUnsignedPaymentTransaction(unsignedTransaction);
 
@@ -1468,17 +1481,15 @@ export function PaymentCard() {
           throw new Error("Transaction confirmation requires authentication");
         }
 
-        const shouldAuthenticateConfirmation = Boolean(confirmationAuthToken);
+        const shouldAuthenticateConfirmation =
+          sendJson.confirmationRequiresAuthToken &&
+          Boolean(confirmationAuthToken);
         const confirmationConnection = new Connection(
           sendJson.confirmationRpcEndpoint,
           {
             commitment: "confirmed",
             ...(shouldAuthenticateConfirmation
               ? {
-                  wsEndpoint: getAuthenticatedConfirmationWsEndpoint(
-                    sendJson.confirmationRpcEndpoint,
-                    confirmationAuthToken
-                  ),
                   httpHeaders: {
                     Authorization: `Bearer ${confirmationAuthToken}`,
                   },
@@ -1487,18 +1498,11 @@ export function PaymentCard() {
           }
         );
 
-        const confirmation = await confirmationConnection.confirmTransaction(
-          {
-            signature: sendJson.signature,
-            blockhash: unsignedTransaction.recentBlockhash,
-            lastValidBlockHeight: unsignedTransaction.lastValidBlockHeight,
-          },
-          "confirmed"
-        );
-
-        if (confirmation.value.err) {
-          throw new Error(`Transaction failed on-chain: ${sendJson.signature}`);
-        }
+        await confirmPaymentTransactionByPolling({
+          connection: confirmationConnection,
+          signature: sendJson.signature,
+          lastValidBlockHeight: unsignedTransaction.lastValidBlockHeight,
+        });
 
         return sendJson.signature;
       }
@@ -1558,6 +1562,15 @@ export function PaymentCard() {
 
       await signAndSendUnsignedTransaction(unsignedTransaction);
       setIsMintInitialized(true);
+
+      try {
+        await ensurePaymentTransferQueueCrank({
+          mint: tokenMint,
+          validator: unsignedTransaction.validator,
+        });
+      } catch (error) {
+        console.warn("Failed to ensure transfer queue crank after setup", error);
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Mint setup failed";
       setMintSetupError(
@@ -1704,7 +1717,8 @@ export function PaymentCard() {
 
   const handleSend = useCallback(async () => {
     if (!publicKey || !signTransaction || !connected) return;
-    if (!resolvedReceiver || isResolvingRecipient) return;
+    if (isResolvingRecipient) return;
+    if (!isStealthReceiver && !resolvedReceiver) return;
     if (!rawAmount || rawAmount === "0") return;
     if (isDestinationEataChecking || requiresDestinationEataSetup) return;
 
@@ -1721,24 +1735,25 @@ export function PaymentCard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           from: publicKey.toBase58(),
-          to: resolvedReceiver,
+          to: isStealthReceiver ? trimmedReceiver : resolvedReceiver,
           mint: tokenMint,
           amount: rawAmount,
           visibility:
+            isStealthReceiver ||
             isPrivate ||
             sourceBalance === "ephemeral" ||
             recipientBalance === "ephemeral"
               ? "private"
               : "public",
-          fromBalance: sourceBalance,
-          toBalance: recipientBalance,
-          ...(sourceBalance === "ephemeral" && privateAuthToken
+          fromBalance: isStealthReceiver ? "base" : sourceBalance,
+          toBalance: isStealthReceiver ? "base" : recipientBalance,
+          ...(!isStealthReceiver && sourceBalance === "ephemeral" && privateAuthToken
             ? { authToken: privateAuthToken }
             : {}),
           ...(effectiveGasless ? { gasless: true } : {}),
           ...(memo ? { memo } : {}),
           exactOut: effectiveExactOut,
-          ...(isPrivate
+          ...(isPrivate || isStealthReceiver
             ? {
                 minDelayMs: String(minDelayMs),
                 maxDelayMs: String(maxDelayMs),
@@ -1770,7 +1785,8 @@ export function PaymentCard() {
         () => setStatus("sending"),
         {
           authToken: privateAuthToken,
-          submitViaPaymentsApi: sourceBalance === "ephemeral",
+          submitViaPaymentsApi:
+            !isStealthReceiver && (isPrivate || sourceBalance === "ephemeral"),
         }
       );
 
@@ -1779,6 +1795,9 @@ export function PaymentCard() {
       dispatchPrivateBalanceRefresh();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Payment failed";
+      if (err instanceof PaymentTransactionSubmissionError && err.signature) {
+        setTxSignature(err.signature);
+      }
       if (message.includes("User rejected")) {
         setError("Transaction rejected by user");
       } else {
@@ -1792,6 +1811,8 @@ export function PaymentCard() {
     connected,
     rawAmount,
     resolvedReceiver,
+    trimmedReceiver,
+    isStealthReceiver,
     tokenMint,
     isPrivate,
     sourceBalance,
@@ -2025,10 +2046,15 @@ export function PaymentCard() {
                     setReceiver(e.target.value);
                     resetResultState();
                   }}
-                  placeholder="Solana wallet address or .sol domain"
+                  placeholder="Wallet address, .sol domain, or .block handle"
                   className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground/40 outline-none font-mono"
                 />
               </div>
+              {receiver && isStealthReceiver && (
+                <div className="mt-2 text-xs text-muted-foreground">
+                  MagicBlock stealth handle. This payment will use private routing.
+                </div>
+              )}
               {receiver && isResolvingRecipient && (
                 <div className="mt-2 text-xs text-muted-foreground">
                   Resolving domain...
@@ -2040,8 +2066,8 @@ export function PaymentCard() {
                   <span className="text-foreground">
                     {recipientPrimaryDomain}
                   </span>
-                </div>
-              )}
+                  </div>
+                )}
               {receiver &&
                 isDomainReceiver &&
                 resolvedReceiver &&
@@ -2053,23 +2079,26 @@ export function PaymentCard() {
                     </span>
                   </div>
                 )}
-              {receiver && !isResolvingRecipient && isValidReceiver && (
-                <div className="mt-2 text-xs text-muted-foreground">
-                  Public:{" "}
-                  {isRecipientTokenBalanceLoading
-                    ? "..."
-                    : `${recipientTokenBalance ?? "0"} ${selectedToken.symbol}`}
-                  <span className="px-1.5 text-muted-foreground/60">|</span>
-                  Shielded: ***
-                </div>
-              )}
+              {receiver &&
+                !isStealthReceiver &&
+                !isResolvingRecipient &&
+                isValidReceiver && (
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    Public:{" "}
+                    {isRecipientTokenBalanceLoading
+                      ? "..."
+                      : `${recipientTokenBalance ?? "0"} ${selectedToken.symbol}`}
+                    <span className="px-1.5 text-muted-foreground/60">|</span>
+                    Shielded: ***
+                  </div>
+                )}
               {receiver &&
                 !isResolvingRecipient &&
                 !isValidReceiver &&
                 !isDomainReceiver && (
                   <div className="mt-2 flex items-center gap-1.5 text-xs text-destructive">
                     <AlertTriangle className="w-3 h-3" />
-                    Invalid Solana address
+                    Invalid recipient
                   </div>
                 )}
               <fieldset className="mt-3">
@@ -2123,13 +2152,26 @@ export function PaymentCard() {
               id="private-transfer-toggle"
               label="Shielded transfer"
               enabled={isPrivate}
-              onEnabledChange={handlePrivateRoutingChange}
+              onEnabledChange={(enabled) => {
+                if (isStealthReceiver && !enabled) {
+                  resetResultState();
+                  setIsPrivate(true);
+                  return;
+                }
+                handlePrivateRoutingChange(enabled);
+              }}
               summary={
-                recipientBalance === "ephemeral"
+                isStealthReceiver
+                  ? `Stealth handle · ${routingSummary}`
+                  : recipientBalance === "ephemeral"
                   ? "Shielded balance delivery"
                   : routingSummary
               }
-              disabledDescription="Enable MagicBlock shielded transactions"
+              disabledDescription={
+                isStealthReceiver
+                  ? "Stealth handles always use private routing"
+                  : "Enable MagicBlock shielded transactions"
+              }
               minDelayMs={minDelayMs}
               maxDelayMs={maxDelayMs}
               onDelayRangeChange={handleDelayRangeChange}
@@ -2333,7 +2375,9 @@ export function PaymentCard() {
                     <ExternalLink className="h-3 w-3 shrink-0" />
                   </a>
                 ) : (
-                  <span className="text-xs text-destructive">{error}</span>
+                  <span className="min-w-0 break-all text-xs text-destructive">
+                    {error}
+                  </span>
                 )}
                 {errorTxSignature && !errorTransactionSignature && (
                   <a
@@ -2547,7 +2591,7 @@ function PaymentActionButton({
         disabled
         className="w-full py-4 rounded-xl bg-secondary text-muted-foreground font-semibold text-base cursor-not-allowed"
       >
-        Enter recipient address
+        Enter recipient
       </button>
     );
   }
@@ -2569,7 +2613,7 @@ function PaymentActionButton({
         disabled
         className="w-full py-4 rounded-xl bg-secondary text-muted-foreground font-semibold text-base cursor-not-allowed"
       >
-        Invalid recipient address
+        Invalid recipient
       </button>
     );
   }
