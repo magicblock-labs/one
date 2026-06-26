@@ -8,10 +8,13 @@ import { useAggregatorTokens } from "@/hooks/use-aggregator-tokens";
 import { PRIVATE_BALANCE_REFRESH_EVENT } from "@/lib/private-balance-refresh";
 import { PAYMENTS_DEFAULT_USDC_MINT } from "@/lib/payments";
 import {
+  PRIVATE_BALANCE_MINTS_EVENT,
+  PRIVATE_AUTH_TOKEN_EVENT,
   clearStoredPrivateAuthToken,
   fetchPrivateBalance,
   fetchSplChallenge,
   formatBaseUnits,
+  getStoredPrivateBalanceMints,
   getStoredPrivateAuthToken,
   loginSplPrivate,
   setStoredPrivateAuthToken,
@@ -30,9 +33,20 @@ export function NetWorthPanel() {
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [balanceError, setBalanceError] = useState<string | null>(null);
+  const [storedPrivateBalanceMints, setStoredPrivateBalanceMints] = useState<
+    string[]
+  >([]);
 
   const rows = useMemo(() => {
-    return [SOL_MINT, PAYMENTS_DEFAULT_USDC_MINT].map((mint) => {
+    const mints = Array.from(
+      new Set([
+        SOL_MINT,
+        PAYMENTS_DEFAULT_USDC_MINT,
+        ...storedPrivateBalanceMints,
+      ]),
+    );
+
+    return mints.map((mint) => {
       const meta = findTokenByMint(mint, tokens) ?? findTokenByMint(mint);
       return {
         mint,
@@ -41,15 +55,50 @@ export function NetWorthPanel() {
         logoURI: meta?.logoURI ?? "",
       };
     });
-  }, [tokens]);
+  }, [storedPrivateBalanceMints, tokens]);
 
   useEffect(() => {
     if (!owner) {
       setAuthToken(null);
       setRawBalances({});
+      setStoredPrivateBalanceMints([]);
       return;
     }
     setAuthToken(getStoredPrivateAuthToken(owner));
+    setStoredPrivateBalanceMints(getStoredPrivateBalanceMints(owner));
+    const syncAuthToken = () => {
+      setAuthToken(getStoredPrivateAuthToken(owner));
+    };
+
+    window.addEventListener(PRIVATE_AUTH_TOKEN_EVENT, syncAuthToken);
+    window.addEventListener("storage", syncAuthToken);
+    return () => {
+      window.removeEventListener(PRIVATE_AUTH_TOKEN_EVENT, syncAuthToken);
+      window.removeEventListener("storage", syncAuthToken);
+    };
+  }, [owner]);
+
+  useEffect(() => {
+    if (!owner) return;
+
+    const syncStoredPrivateBalanceMints = () => {
+      setStoredPrivateBalanceMints(getStoredPrivateBalanceMints(owner));
+    };
+    const onPrivateBalanceMints = (event: Event) => {
+      const detail = (event as CustomEvent<{ pubkey?: string }>).detail;
+      if (detail?.pubkey && detail.pubkey !== owner) return;
+      syncStoredPrivateBalanceMints();
+    };
+
+    window.addEventListener(PRIVATE_BALANCE_MINTS_EVENT, onPrivateBalanceMints);
+    window.addEventListener("storage", syncStoredPrivateBalanceMints);
+    return () => {
+      window.removeEventListener(
+        PRIVATE_BALANCE_MINTS_EVENT,
+        onPrivateBalanceMints,
+      );
+      window.removeEventListener("storage", syncStoredPrivateBalanceMints);
+    };
   }, [owner]);
 
   const loadBalances = useCallback(
