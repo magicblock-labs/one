@@ -1,7 +1,11 @@
 import { getPaymentsApiUrl, PAYMENTS_CLUSTER } from "@/lib/payments";
 
 const STORAGE_PREFIX = "magicblock:spl-private-auth-token";
+const PRIVATE_BALANCE_MINTS_STORAGE_PREFIX =
+  "magicblock:spl-private-positive-balance-mints";
 export const PRIVATE_AUTH_TOKEN_EVENT = "magicblock:spl-private-auth-token";
+export const PRIVATE_BALANCE_MINTS_EVENT =
+  "magicblock:spl-private-balance-mints";
 
 function dispatchPrivateAuthTokenEvent(pubkeyBase58: string) {
   if (typeof window === "undefined") return;
@@ -10,6 +14,56 @@ function dispatchPrivateAuthTokenEvent(pubkeyBase58: string) {
       detail: { pubkey: pubkeyBase58 },
     }),
   );
+}
+
+function dispatchPrivateBalanceMintsEvent(pubkeyBase58: string, mint: string) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent(PRIVATE_BALANCE_MINTS_EVENT, {
+      detail: { pubkey: pubkeyBase58, mint },
+    }),
+  );
+}
+
+function isPositiveBaseUnits(raw: string) {
+  try {
+    return BigInt(raw) > BigInt(0);
+  } catch {
+    return false;
+  }
+}
+
+export function getStoredPrivateBalanceMints(pubkeyBase58: string): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(
+      `${PRIVATE_BALANCE_MINTS_STORAGE_PREFIX}:${pubkeyBase58}`,
+    );
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return Array.from(
+      new Set(parsed.filter((mint): mint is string => typeof mint === "string")),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function storePrivateBalanceMint(pubkeyBase58: string, mint: string) {
+  if (typeof window === "undefined") return;
+  try {
+    const storedMints = getStoredPrivateBalanceMints(pubkeyBase58);
+    if (storedMints.includes(mint)) return;
+
+    localStorage.setItem(
+      `${PRIVATE_BALANCE_MINTS_STORAGE_PREFIX}:${pubkeyBase58}`,
+      JSON.stringify([...storedMints, mint]),
+    );
+    dispatchPrivateBalanceMintsEvent(pubkeyBase58, mint);
+  } catch {
+    /* ignore storage failures */
+  }
 }
 
 export function getStoredPrivateAuthToken(pubkeyBase58: string): string | null {
@@ -116,7 +170,11 @@ export async function fetchPrivateBalance(
     }
     throw new Error(message);
   }
-  return res.json() as Promise<PrivateBalanceRow>;
+  const row = (await res.json()) as PrivateBalanceRow;
+  if (isPositiveBaseUnits(row.balance)) {
+    storePrivateBalanceMint(owner, row.mint || mint);
+  }
+  return row;
 }
 
 export function formatBaseUnits(raw: string, decimals: number): string {
