@@ -116,7 +116,9 @@ export function NetWorthPanel() {
             next[mint] = "0";
             const msg =
               e instanceof Error ? e.message : "Failed to load balance";
-            errors.push(`${symbol}: ${msg}`);
+            if (msg !== "Mint account not found") {
+              errors.push(`${symbol}: ${msg}`);
+            }
           }
         }),
       );
