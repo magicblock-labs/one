@@ -36,7 +36,6 @@ import {
 } from "@/lib/private-balance-refresh";
 import { PAYMENTS_DEFAULT_USDC_MINT } from "@/lib/payments";
 import {
-  clearStoredPrivateAuthToken,
   fetchPrivateBalance,
   fetchSplChallenge,
   formatBaseUnits,
@@ -538,8 +537,6 @@ export function ShieldCard() {
         }
         setPrivateBalanceRaw(null);
         setPrivateBalanceError(mismatchFix ? null : message);
-        clearStoredPrivateAuthToken(owner);
-        setAuthToken(null);
       } finally {
         setPrivateBalanceLoading(false);
       }

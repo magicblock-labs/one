@@ -10,7 +10,6 @@ import { PAYMENTS_DEFAULT_USDC_MINT } from "@/lib/payments";
 import {
   PRIVATE_BALANCE_MINTS_EVENT,
   PRIVATE_AUTH_TOKEN_EVENT,
-  clearStoredPrivateAuthToken,
   fetchPrivateBalance,
   fetchSplChallenge,
   formatBaseUnits,
@@ -106,23 +105,24 @@ export function NetWorthPanel() {
       if (!owner) return;
       setBalanceLoading(true);
       setBalanceError(null);
-      try {
-        const next: Record<string, string> = {};
-        await Promise.all(
-          rows.map(async ({ mint }) => {
+      const next: Record<string, string> = {};
+      const errors: string[] = [];
+      await Promise.all(
+        rows.map(async ({ mint, symbol }) => {
+          try {
             const row = await fetchPrivateBalance(owner, mint, token);
             next[mint] = row.balance;
-          }),
-        );
-        setRawBalances(next);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : "Failed to load balances";
-        setBalanceError(msg);
-        clearStoredPrivateAuthToken(owner);
-        setAuthToken(null);
-      } finally {
-        setBalanceLoading(false);
-      }
+          } catch (e) {
+            next[mint] = "0";
+            const msg =
+              e instanceof Error ? e.message : "Failed to load balance";
+            errors.push(`${symbol}: ${msg}`);
+          }
+        }),
+      );
+      setRawBalances(next);
+      setBalanceError(errors[0] ?? null);
+      setBalanceLoading(false);
     },
     [owner, rows],
   );
