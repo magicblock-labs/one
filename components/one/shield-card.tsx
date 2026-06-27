@@ -36,6 +36,7 @@ import {
 } from "@/lib/private-balance-refresh";
 import { PAYMENTS_DEFAULT_USDC_MINT } from "@/lib/payments";
 import {
+  clearStoredPrivateAuthToken,
   fetchPrivateBalance,
   fetchSplChallenge,
   formatBaseUnits,
@@ -298,6 +299,17 @@ function formatEataValidatorMismatchMessage(fix: EataValidatorMismatchFix) {
   return "Shielded account is delegated to another validator.";
 }
 
+function isPrivateAuthFailure(message: string) {
+  const normalized = message.toLowerCase();
+  return normalized.includes("auth") ||
+    normalized.includes("unauthorized") ||
+    normalized.includes("invalid token") ||
+    normalized.includes("missing token") ||
+    normalized.includes("access denied") ||
+    normalized.includes("401") ||
+    normalized.includes("403");
+}
+
 function getAuthenticatedConfirmationWsEndpoint(
   rpcEndpoint: string,
   authToken: string
@@ -558,6 +570,9 @@ export function ShieldCard() {
           setUndelegateEataError(null);
           setError(formatEataValidatorMismatchMessage(mismatchFix));
           setStatus("error");
+        } else if (isPrivateAuthFailure(message)) {
+          clearStoredPrivateAuthToken(owner);
+          setAuthToken(null);
         }
         setPrivateBalanceRaw(null);
         setPrivateBalanceError(mismatchFix ? null : message);
