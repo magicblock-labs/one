@@ -8,6 +8,7 @@ import { useAggregatorTokens } from "@/hooks/use-aggregator-tokens";
 import { PRIVATE_BALANCE_REFRESH_EVENT } from "@/lib/private-balance-refresh";
 import { PAYMENTS_DEFAULT_USDC_MINT } from "@/lib/payments";
 import {
+  clearStoredPrivateAuthToken,
   PRIVATE_BALANCE_MINTS_EVENT,
   PRIVATE_AUTH_TOKEN_EVENT,
   fetchPrivateBalance,
@@ -19,6 +20,17 @@ import {
   setStoredPrivateAuthToken,
 } from "@/lib/spl-private-balance";
 import { findTokenByMint, SOL_MINT } from "@/lib/tokens";
+
+function isPrivateAuthFailure(message: string) {
+  const normalized = message.toLowerCase();
+  return normalized.includes("auth") ||
+    normalized.includes("unauthorized") ||
+    normalized.includes("invalid token") ||
+    normalized.includes("missing token") ||
+    normalized.includes("access denied") ||
+    normalized.includes("401") ||
+    normalized.includes("403");
+}
 
 export function NetWorthPanel() {
   const { connected, publicKey, signMessage } = useUnifiedWallet();
@@ -107,6 +119,7 @@ export function NetWorthPanel() {
       setBalanceError(null);
       const next: Record<string, string> = {};
       const errors: string[] = [];
+      let authFailed = false;
       await Promise.all(
         rows.map(async ({ mint, symbol }) => {
           try {
@@ -116,12 +129,22 @@ export function NetWorthPanel() {
             next[mint] = "0";
             const msg =
               e instanceof Error ? e.message : "Failed to load balance";
-            if (msg !== "Mint account not found") {
+            if (isPrivateAuthFailure(msg)) {
+              authFailed = true;
+            } else if (msg !== "Mint account not found") {
               errors.push(`${symbol}: ${msg}`);
             }
           }
         }),
       );
+      if (authFailed) {
+        clearStoredPrivateAuthToken(owner);
+        setAuthToken(null);
+        setRawBalances({});
+        setBalanceError(null);
+        setBalanceLoading(false);
+        return;
+      }
       setRawBalances(next);
       setBalanceError(errors[0] ?? null);
       setBalanceLoading(false);
