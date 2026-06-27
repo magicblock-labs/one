@@ -353,6 +353,17 @@ function formatEataValidatorMismatchMessage(fix: EataValidatorMismatchFix) {
   return "Shielded account is delegated to another validator.";
 }
 
+function isPrivateAuthFailure(message: string) {
+  const normalized = message.toLowerCase();
+  return normalized.includes("auth") ||
+    normalized.includes("unauthorized") ||
+    normalized.includes("invalid token") ||
+    normalized.includes("missing token") ||
+    normalized.includes("access denied") ||
+    normalized.includes("401") ||
+    normalized.includes("403");
+}
+
 function getErrorTransactionLabel(message: string | null) {
   const expiredMatch = message?.match(
     /^Signature\s+[1-9A-HJ-NP-Za-km-z]{64,}\s+has expired:\s*(.+)$/
@@ -935,11 +946,12 @@ export function PaymentCard() {
           setUndelegateEataError(null);
           setError(formatEataValidatorMismatchMessage(mismatchFix));
           setStatus("error");
+        } else if (isPrivateAuthFailure(message)) {
+          clearStoredPrivateAuthToken(owner);
+          setPrivateAuthToken(null);
         }
         setPrivateBalanceRaw(null);
         setPrivateBalanceError(mismatchFix ? null : message);
-        clearStoredPrivateAuthToken(owner);
-        setPrivateAuthToken(null);
         setSourceBalance("base");
       } finally {
         setIsPrivateBalanceLoading(false);
