@@ -48,7 +48,7 @@ const PAYMENT_QUERY_PARAMS = [
   "toBalance",
 ] as const;
 const REQUEST_QUERY_PARAMS = ["prd", "ramt", "rmint"] as const;
-const SHIELD_QUERY_PARAMS = ["shamt", "shmint"] as const;
+const SHIELD_QUERY_PARAMS = ["shamt", "shmint", "shmode"] as const;
 
 type TopTab = (typeof topTabs)[number]["id"];
 
@@ -108,7 +108,9 @@ export function TradeHub({
       searchParams.get("ssplit")
   );
   const hasShieldSelection = Boolean(
-    searchParams.get("shamt") || searchParams.get("shmint")
+    searchParams.get("shamt") ||
+      searchParams.get("shmint") ||
+      searchParams.get("shmode")
   );
   const [activeTop, setActiveTop] = useState<TopTab>(
     selectableUrlTab

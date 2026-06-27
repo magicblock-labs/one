@@ -99,6 +99,7 @@ const SHIELD_TOKEN_SELECTION_ENABLED = true;
 const SHIELD_BALANCE_RECHECK_DELAY_MS = 2_500;
 const SHIELD_AMOUNT_QUERY_PARAM = "shamt";
 const SHIELD_MINT_QUERY_PARAM = "shmint";
+const SHIELD_MODE_QUERY_PARAM = "shmode";
 const SPL_TOKEN_ACCOUNT_AMOUNT_OFFSET = 64;
 const SPL_TOKEN_ACCOUNT_AMOUNT_LENGTH = 8;
 
@@ -203,6 +204,14 @@ function getInitialShieldMint(searchParams: ReadonlyURLSearchParams) {
   } catch {
     return PAYMENTS_DEFAULT_USDC_MINT;
   }
+}
+
+function getInitialShieldMode(
+  searchParams: ReadonlyURLSearchParams
+): ShieldMode {
+  return searchParams.get(SHIELD_MODE_QUERY_PARAM) === "unshield"
+    ? "unshield"
+    : "shield";
 }
 
 function shortenAddress(value: string) {
@@ -365,8 +374,21 @@ async function fetchTokenBalanceBaseUnits(
   tokenMint: string
 ) {
   if (tokenMint === SOL_MINT) {
-    const lamports = await connection.getBalance(owner, "processed");
-    return String(lamports);
+    const mint = new PublicKey(tokenMint);
+    const [lamports, wrappedAccounts] = await Promise.all([
+      connection.getBalance(owner, "processed"),
+      connection.getMultipleAccountsInfo(
+        getAssociatedTokenAccounts(owner, mint),
+        "processed"
+      ),
+    ]);
+    const wrappedLamports = wrappedAccounts.reduce((total, account) => {
+      return (
+        total + (account ? readTokenAccountAmount(account.data) : BigInt(0))
+      );
+    }, BigInt(0));
+
+    return (BigInt(lamports) + wrappedLamports).toString();
   }
 
   const tokenAccounts = await connection.getTokenAccountsByOwner(
@@ -420,7 +442,9 @@ export function ShieldCard() {
   const { tokens } = useAggregatorTokens();
 
   const owner = publicKey?.toBase58() ?? null;
-  const [mode, setMode] = useState<ShieldMode>("shield");
+  const [mode, setMode] = useState<ShieldMode>(() =>
+    getInitialShieldMode(searchParams)
+  );
   const [tokenMint, setTokenMint] = useState(() =>
     getInitialShieldMint(searchParams)
   );
@@ -582,17 +606,20 @@ export function ShieldCard() {
     const nextMint = shouldPersistMint ? tokenMint : "";
     const currentAmount = params.get(SHIELD_AMOUNT_QUERY_PARAM) ?? "";
     const currentMint = params.get(SHIELD_MINT_QUERY_PARAM) ?? "";
+    const currentMode = params.get(SHIELD_MODE_QUERY_PARAM) ?? "";
     const currentTab = params.get("tab") ?? "";
 
     if (
       currentAmount === amount &&
       currentMint === nextMint &&
+      currentMode === mode &&
       currentTab === "shield"
     ) {
       return;
     }
 
     params.set("tab", "shield");
+    params.set(SHIELD_MODE_QUERY_PARAM, mode);
 
     if (amount) {
       params.set(SHIELD_AMOUNT_QUERY_PARAM, amount);
@@ -610,7 +637,7 @@ export function ShieldCard() {
     router.replace(query ? `${pathname}?${query}` : pathname, {
       scroll: false,
     });
-  }, [amount, pathname, router, searchParams, tokenMint]);
+  }, [amount, mode, pathname, router, searchParams, tokenMint]);
 
   const subscribeOnceToWalletBalanceChange = useCallback(() => {
     if (!publicKey) return;
