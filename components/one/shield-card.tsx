@@ -1131,6 +1131,23 @@ export function ShieldCard() {
         const unsignedTransaction =
           (await buildRes.json()) as UnsignedShieldTransaction;
 
+        const transaction = deserializeUnsignedShieldTransaction(
+          unsignedTransaction
+        );
+        const transactionMessage =
+          transaction instanceof VersionedTransaction
+            ? transaction.message
+            : transaction.compileMessage();
+        const [{ value: feeLamports }, walletLamports] = await Promise.all([
+          connection.getFeeForMessage(transactionMessage, "confirmed"),
+          connection.getBalance(publicKey, "confirmed"),
+        ]);
+        if (feeLamports !== null && walletLamports < feeLamports) {
+          throw new Error(
+            "Insufficient SOL for transaction fees. Top up your wallet with SOL and try again."
+          );
+        }
+
         setStatus("signing");
         const signature = await signAndSendUnsignedTransaction(
           unsignedTransaction,
@@ -1165,6 +1182,7 @@ export function ShieldCard() {
       amount,
       authToken,
       connected,
+      connection,
       loadPrivateBalance,
       loadPublicBalance,
       mode,
