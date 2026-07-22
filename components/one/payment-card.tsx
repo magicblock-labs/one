@@ -75,7 +75,6 @@ type PaymentStatus =
   | "error";
 
 type BalanceLocation = "base" | "ephemeral";
-type DestinationEataStatus = "idle" | "checking" | "exists" | "missing" | "error";
 
 interface UnsignedPaymentTransaction {
   kind: string;
@@ -118,17 +117,6 @@ const SWAP_QUERY_PARAMS = ["buy", "sell", "amt"] as const;
 const REQUEST_QUERY_PARAMS = ["prd", "ramt", "rmint"] as const;
 const SPL_TOKEN_ACCOUNT_AMOUNT_OFFSET = 64;
 const SPL_TOKEN_ACCOUNT_AMOUNT_LENGTH = 8;
-const EPHEMERAL_SPL_TOKEN_PROGRAM_ID = new PublicKey(
-  "SPLxh1LVZzEkX99H6rqYizhytLWPZVV296zyYDPagv2"
-);
-
-function deriveEphemeralAtaAddress(owner: PublicKey, mint: PublicKey) {
-  return PublicKey.findProgramAddressSync(
-    [owner.toBuffer(), mint.toBuffer()],
-    EPHEMERAL_SPL_TOKEN_PROGRAM_ID
-  )[0];
-}
-
 function base64ToUint8Array(base64: string) {
   const binary = globalThis.atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -619,13 +607,6 @@ export function PaymentCard() {
   const [undelegateEataError, setUndelegateEataError] = useState<string | null>(
     null
   );
-  const [destinationEataStatus, setDestinationEataStatus] =
-    useState<DestinationEataStatus>("idle");
-  const [isSettingUpDestinationEata, setIsSettingUpDestinationEata] =
-    useState(false);
-  const [destinationEataError, setDestinationEataError] = useState<
-    string | null
-  >(null);
 
   const gaslessAutoOptOutRef = useRef(false);
 
@@ -673,19 +654,8 @@ export function PaymentCard() {
     return formatPrivateRoutingSummary(split, minDelayMs, maxDelayMs);
   }, [split, minDelayMs, maxDelayMs]);
 
-  const shouldCheckDestinationEata =
-    sourceBalance === "ephemeral" &&
-    recipientBalance === "ephemeral" &&
-    Boolean(resolvedReceiver) &&
-    !isResolvingRecipient;
   const isGaslessDisabledForSource = sourceBalance === "ephemeral";
   const effectiveGasless = isGasless && !isGaslessDisabledForSource;
-
-  const isDestinationEataChecking =
-    shouldCheckDestinationEata && destinationEataStatus === "checking";
-
-  const requiresDestinationEataSetup =
-    shouldCheckDestinationEata && destinationEataStatus === "missing";
 
   const resetResultState = useCallback(() => {
     setStatus((currentStatus) => {
@@ -698,49 +668,9 @@ export function PaymentCard() {
     setError(null);
     setValidatorMismatchFix(null);
     setUndelegateEataError(null);
-    setDestinationEataError(null);
     setTxSignature(null);
     setTxExplorerRpcEndpoint(null);
   }, []);
-
-  useEffect(() => {
-    if (!shouldCheckDestinationEata || !resolvedReceiver) {
-      setDestinationEataStatus("idle");
-      setDestinationEataError(null);
-      return;
-    }
-
-    let cancelled = false;
-
-    setDestinationEataStatus("checking");
-    setDestinationEataError(null);
-
-    const checkDestinationEata = async () => {
-      try {
-        const destinationEata = deriveEphemeralAtaAddress(
-          new PublicKey(resolvedReceiver),
-          new PublicKey(tokenMint)
-        );
-        const accountInfo = await connection.getAccountInfo(
-          destinationEata,
-          "confirmed"
-        );
-
-        if (cancelled) return;
-        setDestinationEataStatus(accountInfo ? "exists" : "missing");
-      } catch {
-        if (cancelled) return;
-        setDestinationEataStatus("error");
-        setDestinationEataError("Could not check recipient shielded account");
-      }
-    };
-
-    void checkDestinationEata();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [connection, resolvedReceiver, shouldCheckDestinationEata, tokenMint]);
 
   useEffect(() => {
     if (!searchMint) return;
@@ -1650,75 +1580,10 @@ export function PaymentCard() {
     signAndSendUnsignedTransaction,
   ]);
 
-  const handleSetupDestinationEata = useCallback(async () => {
-    if (!publicKey || !signTransaction || !connected || !resolvedReceiver) {
-      return;
-    }
-
-    setIsSettingUpDestinationEata(true);
-    setDestinationEataError(null);
-    setTxSignature(null);
-    setTxExplorerRpcEndpoint(null);
-    setStatus("building");
-
-    try {
-      const buildRes = await fetch("/api/payments/transfer", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          from: publicKey.toBase58(),
-          to: resolvedReceiver,
-          mint: tokenMint,
-          amount: "0",
-          visibility: "private",
-          fromBalance: "base",
-          toBalance: "ephemeral",
-        }),
-      });
-
-      if (!buildRes.ok) {
-        const errData = await buildRes.json().catch(() => ({}));
-        throw new Error(errData.error || `Setup failed: ${buildRes.status}`);
-      }
-
-      const unsignedTransaction =
-        (await buildRes.json()) as UnsignedPaymentTransaction;
-
-      setStatus("signing");
-      await signAndSendUnsignedTransaction(
-        unsignedTransaction,
-        () => setStatus("sending")
-      );
-
-      setDestinationEataStatus("exists");
-      setStatus("idle");
-      dispatchPrivateBalanceRefresh();
-    } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : "Recipient setup failed";
-      setDestinationEataError(
-        message.includes("User rejected")
-          ? "Transaction rejected by user"
-          : message
-      );
-      setStatus("idle");
-    } finally {
-      setIsSettingUpDestinationEata(false);
-    }
-  }, [
-    publicKey,
-    signTransaction,
-    connected,
-    resolvedReceiver,
-    tokenMint,
-    signAndSendUnsignedTransaction,
-  ]);
-
   const handleSend = useCallback(async () => {
     if (!publicKey || !signTransaction || !connected) return;
     if (!resolvedReceiver || isResolvingRecipient) return;
     if (!rawAmount || rawAmount === "0") return;
-    if (isDestinationEataChecking || requiresDestinationEataSetup) return;
 
     setStatus("building");
     setError(null);
@@ -1816,8 +1681,6 @@ export function PaymentCard() {
     maxDelayMs,
     split,
     isResolvingRecipient,
-    isDestinationEataChecking,
-    requiresDestinationEataSetup,
     signAndSendUnsignedTransaction,
   ]);
 
@@ -1828,7 +1691,6 @@ export function PaymentCard() {
     setError(null);
     setValidatorMismatchFix(null);
     setUndelegateEataError(null);
-    setDestinationEataError(null);
     setAmount("");
     setMemo("");
   }, []);
@@ -2151,53 +2013,6 @@ export function PaymentCard() {
             />
           </div>
 
-          {shouldCheckDestinationEata &&
-            (destinationEataStatus === "checking" ||
-              destinationEataStatus === "missing" ||
-              destinationEataStatus === "error") && (
-              <div className="mx-3 mt-2 rounded-xl border border-border/40 bg-secondary/30 px-4 py-3">
-                {destinationEataStatus === "checking" && (
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Checking recipient shielded account...
-                  </div>
-                )}
-                {destinationEataStatus === "missing" && (
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <span className="text-xs text-muted-foreground">
-                      Recipient shielded account is not initialized.
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleSetupDestinationEata}
-                      disabled={isSettingUpDestinationEata}
-                      className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-md border border-primary/30 bg-background px-3 text-xs font-semibold text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-70"
-                    >
-                      {isSettingUpDestinationEata ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <ShieldCheck className="h-3.5 w-3.5" />
-                      )}
-                      {isSettingUpDestinationEata
-                        ? "Initializing..."
-                        : "Initialize recipient"}
-                    </button>
-                  </div>
-                )}
-                {destinationEataStatus === "error" && destinationEataError && (
-                  <div className="text-xs text-destructive">
-                    {destinationEataError}
-                  </div>
-                )}
-                {destinationEataStatus === "missing" &&
-                  destinationEataError && (
-                    <div className="mt-2 text-xs text-destructive">
-                      {destinationEataError}
-                    </div>
-                  )}
-              </div>
-            )}
-
           <div className="mx-3 mt-2">
             <div className="rounded-xl bg-secondary/30">
               <button
@@ -2460,8 +2275,6 @@ export function PaymentCard() {
               onConnect={openConnectModal}
               isMintInitializationLoading={isMintInitializationLoading}
               requiresMintSetup={isPrivate && isMintInitialized === false}
-              isDestinationEataChecking={isDestinationEataChecking}
-              requiresDestinationEataSetup={requiresDestinationEataSetup}
               onSend={handleSend}
               onRetry={() => {
                 setStatus("idle");
@@ -2495,8 +2308,6 @@ function PaymentActionButton({
   isPrivate,
   isMintInitializationLoading,
   requiresMintSetup,
-  isDestinationEataChecking,
-  requiresDestinationEataSetup,
   onConnect,
   onSend,
   onRetry,
@@ -2513,8 +2324,6 @@ function PaymentActionButton({
   isPrivate: boolean;
   isMintInitializationLoading: boolean;
   requiresMintSetup: boolean;
-  isDestinationEataChecking: boolean;
-  requiresDestinationEataSetup: boolean;
   onConnect: () => void;
   onSend: () => void;
   onRetry: () => void;
@@ -2604,28 +2413,6 @@ function PaymentActionButton({
         className="w-full py-4 rounded-xl bg-secondary text-muted-foreground font-semibold text-base cursor-not-allowed"
       >
         Set up this mint to continue
-      </button>
-    );
-  }
-
-  if (isDestinationEataChecking) {
-    return (
-      <button
-        disabled
-        className="w-full py-4 rounded-xl bg-secondary text-muted-foreground font-semibold text-base cursor-not-allowed"
-      >
-        Checking recipient setup...
-      </button>
-    );
-  }
-
-  if (requiresDestinationEataSetup) {
-    return (
-      <button
-        disabled
-        className="w-full py-4 rounded-xl bg-secondary text-muted-foreground font-semibold text-base cursor-not-allowed"
-      >
-        Initialize recipient first
       </button>
     );
   }

@@ -162,9 +162,16 @@ export async function fetchPrivateBalance(
     let message = `Balance failed (${res.status})`;
     try {
       const err = (await res.json()) as {
-        error?: { message?: string; code?: string };
+        error?: {
+          message?: string;
+          code?: string;
+          details?: { message?: string };
+        };
       };
       if (err.error?.message) message = err.error.message;
+      if (err.error?.details?.message) {
+        message = `${message}: ${err.error.details.message}`;
+      }
     } catch {
       /* ignore */
     }
