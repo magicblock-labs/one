@@ -1,5 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 
+const ALLOWED_HOSTS = new Set([
+  "arweave.net",
+  "arweave.dev",
+  "www.arweave.net",
+  "www.arweave.dev",
+  "ipfs.io",
+  "www.ipfs.io",
+  "cloudflare-ipfs.com",
+  "gateway.pinata.cloud",
+  "dweb.link",
+  "cf-ipfs.com",
+]);
+
 export async function GET(request: NextRequest) {
   const src = request.nextUrl.searchParams.get("src")?.trim();
   if (!src) {
@@ -13,11 +26,15 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid src URL" }, { status: 400 });
   }
 
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
+  if (url.protocol !== "https:") {
     return NextResponse.json(
       { error: "Unsupported src protocol" },
       { status: 400 }
     );
+  }
+
+  if (!ALLOWED_HOSTS.has(url.hostname.toLowerCase())) {
+    return NextResponse.json({ error: "Host not allowed" }, { status: 403 });
   }
 
   const upstreamRes = await fetch(url.toString(), {
